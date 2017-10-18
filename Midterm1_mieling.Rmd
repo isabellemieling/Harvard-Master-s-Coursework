@@ -1,0 +1,309 @@
+---
+title: "CS109B Midterm1"
+author: "Isabelle Mieling"
+date: "February 25, 2017"
+output: pdf_document
+fontsize: 10pt
+sansfont: Calibri
+---
+
+### Load train and test sets
+
+```{r}
+#load libraries 
+library(ggplot2)
+suppressMessages(library('MCMCpack'))
+suppressMessages(library('MGLM'))
+
+```
+
+```{r results="hold"}
+# load train set
+train = read.csv("cs109b-midterm1-data/dataset_1_train.txt", header=TRUE)
+cat("Train data size:", dim(train), "\n")
+
+# load test set
+test = read.csv("cs109b-midterm1-data/dataset_1_test.txt", header=TRUE)
+cat("\nTest data size:", dim(test) , "\n")
+
+# create 2 new dataframes: one with good rating and one with bad rating
+good_rat <- train[train$rating == 1, ]
+bad_rat <- train[train$rating == 0, ]
+
+```
+
+# Problem 1: Does the location of a restaurant relate to its rating? 
+
+### Visualize data
+
+```{r}
+
+# Histograms of postal codes for good and bad ratings 
+#hist(good_rat$postal_code, main='Ratings vs. Postal Codes', xlab='Postal Code')
+#hist(bad_rat$postal_code)
+
+
+# Scatterplot of Latitude and Longitude, separated by color of good ratings and bad ratings 
+ggplot(train, aes(x =latitude, y = longitude)) + 
+    geom_point(aes(color = factor(rating))) +       
+    labs(x="Latitude" , y = "Longitude" ,title="Yelp-Rated 'Good' and 'Bad' 
+         Restaurants by Location" ) +
+    theme(plot.title = element_text(hjust = 0.5)) + scale_color_discrete(name ="Rating", 
+                                labels=c("Good (> 3.5)", "Bad (< 3.5)"))
+
+```
+
+
+Above we see a scatterplot of the latitude and longitude coordinates, the locations, of restaurants from this Yelp review dataset. The points are colored based on whether the restaurant received a good or bad review. From this plot we can immediately see that the points form a few clusters, most likely representing major cities in the dataset. However, though there are clusters in the coordinates that restaurants have, there does not seem to be a relationship between the location of a restaurant and its rating. This can be inferred from the fact that there are both red and blue dots in all of the clusters. Neither red nor blue points show up more than the other. One could analyze each cluster to see whether location within a particular city is related to rating, however, this would steer away from the main goal: predicting a restaurant’s rating based on the information given. As this dataset contains restaurants from many cities, it would not be reasonable to dive deeper into a particular city. Therefore, given the data and the scatterplot above, we claim that the location of a restaurant (in latitude and longitude coordinates) is not related to its rating. 
+
+
+# Problem 2: 
+
+```{r, warning=FALSE}
+
+# make new df with only word counts
+train_words <- train[, -2]
+for(i in 1:19) {
+  train_words <- train_words[, -2]
+}
+
+test_words <- test[, -2]
+for(i in 1:19) {
+  test_words <- test_words[, -2]
+}
+
+
+alpha <- 2
+yG = as.numeric(apply(train_words[train_words$rating == 1, -1], 2, sum))
+yB = as.numeric(apply(train_words[train_words$rating == 0, -1], 2, sum))
+
+```
+
+## 2a. Describe briefly in words why the posterior distribution formed from a Dirichlet prior distribution and a multinomial likelihood is a Dirichlet posterior distribution? What are the parameters for the Dirichlet posterior distribution? 
+
+Using Bayes' Rule we aim to determine the probability of a past event, given that a current event has happened. 
+From this, we can move to Bayesian statistics where when we set up probability models for data, we specify unknown model parameters as well as how the data are generated based on the model parameters. Bayes theorem provides us with a tool to compute the probability of model parameter values based on the observed data. We take the information we assumed about the unknown parameters, combine it with the data, and then put it all together and make a statement about the unknown parameters and updating it with the data we see. This involved deciding on a prior distribution for the unknwon model parameters, constructing a likelihood function based on the data and determining the posterior distribution. This brings us to the key fact in Bayesian statistics: posterior density is proportional to the prior density times the likelihood. Therefore, the posterior distribution formed from a Dirichlet prior distribution and a multinomial likelihood is a Dirichlet posterior distribution. We are simply shifting our Dirichlet prior distribution based on the multinomial likelihood we construct from our data to get our Dirichlet posterior distribution. 
+
+For the probability model we have : $(y^G_1, y^G_2, \ldots, y^G_K)$ and  $(y^B_1, y^B_2, \ldots, y^B_K)$ , representing the total counts of words used in the Yelp reviews for restaurants that received a 'Good' rating and 'Bad' rating, respectively. We have the following parameters for the Dirichlet posterior distribution: $(\theta^G_1, \ldots, \theta^G_K)$ and $(\theta^B_1, \ldots, \theta^B_K)$ , which are assumed to follow a *Dirichlet* prior, and parameter $\alpha$.
+
+## 2b. From a Monte Carlo simulation of the Dirichlet posterior distribution for “good” restaurants, what is the posterior mean probability that the word “chocolate” is used? From a Monte Carlo simulation of the Dirichlet posterior distribution for bad restaurants, what is the posterior mean probability that the word “chocolate” is used?
+
+The prescribed Bayesian model can also be used to analyze words that are most useful for inferring review status. One way to do this is to compute or approximate the posterior distribution of the ratio of multinomial model parameters (relative ratio) for 'good' restaurants relative to 'bad' restaurants, and identify the words that receive high values of this ratio. More specifically, we can calculate this ratio of the posterior parameter values 
+
+$R_k = \theta^A_k/(\theta^A_k + \theta^B_k), k = 1, ..., K$
+
+and return a Monte-Carlo approximation of $\mathbb{E}[R_k \,|\, data]$. The largest $R_k$ this would indicate high relative usage of a word for restaurants rated 'Good' while the smaller values would indicate the same instead for restaurants rated 'Bad'.
+
+The input to the code is the Dirichlet parameter $\alpha$, the number of MC draws `n.sim` for the approximation and the total word counts $(y^G_1, y^G_2, \ldots, y^G_K)$ and $(y^B_1, y^B_2, \ldots, y^B_K)$ from the training set restaurants. The output is a vector containing the approximate values of $\mathbb{E}[R_k \,|\, data]$.
+
+```{r}
+# This function claculates an approximation to E[R_k|data] described above. 
+posterior_mean_R = function(alpha = alpha, yG = NULL, yB = NULL, n.sim = NULL){
+  # number of features
+  K = length(yG)
+  alpha0 = rep(alpha, K)
+  # posterior parameter values  
+  post_thetaG = MCmultinomdirichlet(yG, alpha0, mc = n.sim)
+  post_thetaB = MCmultinomdirichlet(yB, alpha0, mc = n.sim)
+  # empirical values of R_k
+  R = post_thetaG/(post_thetaG + post_thetaB)
+  # calculate approximation to E[R_k|data]
+  ER = apply(R, 2, mean)
+  return(ER)
+}
+
+vals <- posterior_mean_R(alpha = 2, yG = yG, yB = yB, n.sim = 500)
+
+# chocolate is the second word
+vals[2]
+
+
+### MCMCpack
+#mcmc_density <- ddirichlet()
+#x = rdirichlet(10, c(1,2,3))
+#ddirichlet(x, alpha)
+#rdirichlet(n, alpha)
+
+
+```
+
+This gives the mean posterior probability that the word chocolate will be used in a good review. 76% ! 
+
+## 2c. For the restaurants in the test data set, estimate the probability based on the results of the Dirichlet- Multinomial model that each is good versus bad. Create a visual summary relating the estimated probabilities and the actual binary ratings in the test data. 
+
+```{r, echo = FALSE, fig.height = 7, fig.width = 9}
+
+# function
+posterior_pA = function(alpha, yA = NULL, yB = NULL, y_til = NULL){
+	# number of features
+	K = length(yA)
+
+	# total word counts
+	n = sum(y_til)
+	nA = sum(yA)
+	nB = sum(yB)
+
+	# posterior predictive distribution of being class A
+	A1 = lfactorial(n) + lfactorial(nA) - lfactorial(n + nA)
+	A2 = sum(lfactorial(y_til + yA)) - sum(lfactorial(y_til)) - sum(lfactorial(yA))
+	A3 = lfactorial(n + nA) + lgamma(K*alpha) - lgamma(n + nA + K*alpha)
+	A4 = sum(lgamma(y_til + yA + alpha) - lfactorial(y_til + yA) - lgamma(alpha))
+	A5 = lfactorial(nB) + lgamma(K*alpha) - lgamma(nB + K*alpha)
+	A6 = sum(lgamma(yB + alpha) - lfactorial(yB) - lgamma(alpha))
+
+	# posterior predictive distribution of being class B
+	B1 = lfactorial(n) + lfactorial(nB) - lfactorial(n + nB)
+	B2 = sum(lfactorial(y_til + yB)) - sum(lfactorial(y_til)) - sum(lfactorial(yB))
+	B3 = lfactorial(n + nB) + lgamma(K*alpha) - lgamma(n + nB + K*alpha)
+	B4 = sum(lgamma(y_til + yB + alpha) - lfactorial(y_til + yB) - lgamma(alpha))
+	B5 = lfactorial(nA) + lgamma(K*alpha) - lgamma(nA + K*alpha)
+	B6 = sum(lgamma(yA + alpha) - lfactorial(yA) - lgamma(alpha))
+
+	ratio_AB = exp(B1 + B2 + B3 + B4 + B5 + B6 - (A1 + A2 + A3 + A4 + A5 + A6))
+
+	# probability of being class A
+	pA = 1/(1 + ratio_AB)
+
+	return(pA)
+}
+```
+
+```{r, warning=FALSE}
+
+# Estimate probabilities that each is good vs bad 
+
+labels <- test_words[, 1]
+features <- test_words[, -1]
+
+n.test <- nrow(test)
+test_rat_pred <- rep(NA, n.test)
+for(i in 1:n.test) {
+  y_til <- as.numeric(as.character(features[i,]))
+  test_rat_pred[i] <- posterior_pA(alpha, yA = yG, yB = yB, y_til = y_til) 
+}
+test_rat_pred.results <- ifelse(test_rat_pred > 0.5, 1, 0)
+
+# merge dataframes of actual binary ratings with predicted binary ratings and probabilities 
+predict_df <- data.frame(test_rat_pred.results,test_rat_pred, test[,1])
+ggplot(predict_df, aes(x=test_rat_pred, y=test[,1])) + geom_point()
+
+
+
+
+```
+
+
+
+# Problem 3
+This problem is concerned with modeling a restaurant’s rating on factors other than word occurrences.
+
+## 3a. Construct a model for the probability a restaurant is rated “good” as a function of latitude and longitude, average word count, and business attributes. Include quantitative predictor variables as smoothed terms as you see appropriate. You may use default tuning parameter. Summarize the results of the model. Does evidence exist that the smoothed terms are significantly non-linear? Produce visual displays to support your conclusions. [20 points]
+
+
+```{r, warning=FALSE}
+
+library(gam)
+library(lmtest)
+
+# want to model a 'good' rating so use the training set containing only 'good' restaurants 
+good_rat_buz <- good_rat[, 1:21]
+# remove name and location, other than lat and long
+good_rat_buz <- good_rat_buz[, -2]
+good_rat_buz <- good_rat_buz[, -2]
+good_rat_buz <- good_rat_buz[, -2]
+good_rat_buz <- good_rat_buz[, -2]
+# remove rating count 
+good_rat_buz <- good_rat_buz[, -4]
+
+test_prob3 <- test 
+test_prob3 <- test_prob3[, 1:21]
+test_prob3 <- test_prob3[, -2]
+test_prob3 <- test_prob3[, -2]
+test_prob3 <- test_prob3[, -2]
+test_prob3 <- test_prob3[, -2]
+test_prob3 <- test_prob3[, -4]
+
+# Convert cuisine variable to categorical variable
+#good_rat_buz$cuisine <- as.numeric(factor(good_rat_buz$cuisine, levels=c('Bars', 'Italian', 'Fast Food', 'Coffee & Tea' , 'Mexican', 'Pizza', 'Breakfast & Brunch', 'Chinese', 'Sandwiches', 'Burgers', 'Bakeries')))
+#test_prob3$cuisine <- as.numeric(factor(test_prob3$cuisine, levels=c('Bars', 'Italian', 'Fast Food', 'Coffee & Tea' , 'Mexican', 'Pizza', 'Breakfast & Brunch', 'Chinese', 'Sandwiches', 'Burgers', 'Bakeries')))
+
+# Convert wheelchair accessible variable to binary: 1 = yes, 0 = no 
+good_rat_buz$WheelchairAccessible  <- ifelse(good_rat_buz$WheelchairAccessible =='no', 0, 1)
+test_prob3$WheelchairAccessible  <- ifelse(test_prob3$WheelchairAccessible =='no', 0, 1)
+
+# Convert wifi variable to binary: 1 = yes, 0 = no 
+good_rat_buz$WiFi  <- ifelse(good_rat_buz$WiFi =='no', 0, 1)
+test_prob3$WiFi  <- ifelse(test_prob3$WiFi =='no', 0, 1)
+
+# Convert accepts credit cards variable to binary: 1 = yes, 0 = no 
+good_rat_buz$BusinessAcceptsCreditCards  <- ifelse(good_rat_buz$BusinessAcceptsCreditCards =='no', 0, 1)
+test_prob3$BusinessAcceptsCreditCards  <- ifelse(test_prob3$BusinessAcceptsCreditCards =='no', 0, 1)
+
+# Convert dresscode  variable to binary: 1 = yes, 0 = no 
+good_rat_buz$RestaurantsAttire  <- ifelse(good_rat_buz$RestaurantsAttire =='dressy', 0, 1)
+test_prob3$RestaurantsAttire  <- ifelse(test_prob3$RestaurantsAttire =='dressy', 0, 1)
+
+good_rat_buz$RestaurantsReservations  <- ifelse(good_rat_buz$RestaurantsReservations =='no', 0, 1)
+test_prob3$RestaurantsReservations  <- ifelse(test_prob3$RestaurantsReservations =='no', 0, 1)
+
+good_rat_buz$OutdoorSeating  <- ifelse(good_rat_buz$OutdoorSeating =='no', 0, 1)
+test_prob3$OutdoorSeating  <- ifelse(test_prob3$OutdoorSeating =='no', 0, 1)
+
+good_rat_buz$GoodForKids  <- ifelse(good_rat_buz$GoodForKids =='no', 0, 1)
+test_prob3$GoodForKids  <- ifelse(test_prob3$GoodForKids =='no', 0, 1)
+
+### 
+
+mod1 <- gam(rating ~ s(latitude) + s(longitude) + cuisine + WheelchairAccessible + WiFi + BusinessAcceptsCreditCards + Alcohol + NoiseLevel + RestaurantsPriceRange2 + RestaurantsAttire + Smoking + RestaurantsReservations + OutdoorSeating + GoodForKids + s(avg_word_count) , family=binomial(link= 'logit'), data = good_rat_buz)
+
+mod2 <- gam(rating ~ 1, family=binomial(link='logit'), data=good_rat_buz) # null model with only intercept term
+mod3 <- gam(rating ~ ., family=binomial(link='logit'), data=good_rat_buz) # full model with all terms except outcome of interest
+
+# Compare models with likelihood ratio test 
+lrtest(mod1, mod2)
+lrtest(mod1, mod3)
+
+
+```
+
+Model 1 contains all factors and spline terms for quantitative factors. Model 2 is a model with the intercept term only and Model 3 is the full model with all factors unadjusted (i.e. no splines). We can compare these models using the likelihood ratio test. The likelihood ratio test between Model 1 and Model 2 does not result in statistical significance. The likelihood ratio test between Model 1 and Model 3 does result in statistical significance. The difference between Model 1 and Model 2 is whether spline terms are used on some factors. Comparing this with Model 3, that which has all the factors but without spline terms, may indicate whether there is evidence that the smoothed terms are significantly non-linear. The LRT suggest statistical significance in favor of model 2. Therefore, this may indicate that the spline terms are not necessary for the variables. 
+
+## 3b. For your model in part (a), summarize the predictive ability by computing a misclassification rate.
+
+```{r}
+
+# Test this model on test set! 
+
+classification_accuracy = function(true_val,predicted) {
+  # Input: 
+  #   'true_val' - Actual value (truth)
+  #   'predicted' - Predicted probabilites by model 
+  # Output:
+  #   classfication accuracy
+  y = true_val=='Yes'
+  y_ = (predicted>0.5)
+  return (mean(y == y_))
+}
+
+preds = predict(mod1, newdata=test_prob3, type="response")
+gam_testaccuracy1 = classification_accuracy(test_prob3$rating,preds)
+gam_testaccuracy1
+
+
+```
+
+## 3c. Consider a version of model (a) that does not include the cuisine predictor variable. Explain briefly how you would test in your model whether cuisine is an important predictor of the probability of a good restaurant rating. Perform the test, and explain your conclusions.
+
+We could test whether cuisine is an important predictor of the probability of a good restaurant rating by using a likelihood ratio test. This tests whether a simple model nested within a more complicated one is a sufficient model or if the more complicated model is significantly better. 
+
+```{r}
+
+mod4 <- gam(rating ~ s(latitude) + s(longitude)  + WheelchairAccessible + WiFi + BusinessAcceptsCreditCards + Alcohol + NoiseLevel + RestaurantsPriceRange2 + RestaurantsAttire + Smoking + RestaurantsReservations + OutdoorSeating + GoodForKids + s(avg_word_count) , family=binomial(link= 'logit'), data = good_rat_buz)
+
+# Test with a likelihood ratio test 
+lrtest(mod1, mod4)
+```
+
+The results of this likelihood ratio test do not indicate statistical significance for using the more complicated model. Therefore, the nested model, which does not include the cuisine variable, is sufficient. What we can conclude from this test is that the mode simple model, that without the cuisine variable, is sufficient as a model. 
+
+
