@@ -1,0 +1,435 @@
+---
+title: 'Homework 3: Introduction to Bayesian Methds'
+author: "Isabelle Mieling"
+date: "February 21, 2017"
+output: pdf_document
+---
+
+# Problem 1: Authorship Attribution
+
+```{r, eval=TRUE}
+# import libraries
+#install.packages("e1071")
+library(e1071)
+library(ggplot2)
+library('MCMCpack')
+library('MGLM')
+
+#install.packages('MCMCpack')
+#install.packages('MGLM')
+```
+
+```{r results="hold"}
+# import data
+train = read.csv("CS109b-hw3_datasets/dataset1_train_processed_subset.txt", header=FALSE)
+test = read.csv("CS109b-hw3_datasets/dataset1_test_processed_subset.txt", header=FALSE)
+words = read.csv("CS109b-hw3_datasets/words_preprocessed.txt", header=FALSE)
+
+```
+
+# Part 1a: Naive Bayes Classifier
+
+```{r }
+# naivebayes: computes the conditional posterior probabilities of a categorical class variable given predictor variables 
+
+naive_model <- naiveBayes(V1 ~ ., data = train)
+pred <- predict(naive_model, test[, 2:100])
+table1 <- table(pred, test$V1)
+table1
+one <- as.numeric(table1[1,1]) 
+two <- as.numeric(table1[2,2])
+# Overall accuracy
+(one + two)/100
+```
+The overall accuracy we get from using a Naive Bayes Classifier is : 77% 
+
+Though we may get a good classificatin accuracy, using Naive Bayes probabilistic model for 
+this task is not the best options becasue using this model results in a huge simplification.  
+The Naive Bayes probabilistic model assumes that the 100 words are conditionally independent 
+given the author of the piece. This is a huge simplification because it is highly likely that 
+there are some words that fall into phrases that might be found together more often than others. 
+Therefore, one author might use a phrase containing anywhere from 2 to 10 words often throughout 
+his/her writing and therefore these 2 to 10 words would not be conditionally independent of one 
+another. 
+
+
+# Part 1b: Dirichlet-Multinomial Model
+
+```{r}
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+# function: calculates the probability author is Aaron Pressman
+#	See lecture notes for formula
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+
+posterior_pA = function(alpha, yA = NULL, yB = NULL, y_til = NULL){
+	# number of features
+	K = length(yA)
+	# total word counts
+	n = sum(y_til)
+	nA = sum(yA)
+	nB = sum(yB)
+	# posterior predictive distribution of being class A
+	A1 = lfactorial(n) + lfactorial(nA) - lfactorial(n + nA)
+	A2 = sum(lfactorial(y_til + yA)) - sum(lfactorial(y_til)) - sum(lfactorial(yA))
+	A3 = lfactorial(n + nA) + lgamma(K*alpha) - lgamma(n + nA + K*alpha)
+	A4 = sum(lgamma(y_til + yA + alpha) - lfactorial(y_til + yA) - lgamma(alpha))
+	A5 = lfactorial(nB) + lgamma(K*alpha) - lgamma(nB + K*alpha)
+	A6 = sum(lgamma(yB + alpha) - lfactorial(yB) - lgamma(alpha))
+	R_A = exp(A1 + A2 + A3 + A4 + A5 + A6)
+	# posterior predictive distribution of being class B
+	B1 = lfactorial(n) + lfactorial(nB) - lfactorial(n + nB)
+	B2 = sum(lfactorial(y_til + yB)) - sum(lfactorial(y_til)) - sum(lfactorial(yB))
+	B3 = lfactorial(n + nB) + lgamma(K*alpha) - lgamma(n + nB + K*alpha)
+	B4 = sum(lgamma(y_til + yB + alpha) - lfactorial(y_til + yB) - lgamma(alpha))
+	B5 = lfactorial(nA) + lgamma(K*alpha) - lgamma(nA + K*alpha)
+	B6 = sum(lgamma(yA + alpha) - lfactorial(yA) - lgamma(alpha))
+	R_B = exp(B1 + B2 + B3 + B4 + B5 + B6)
+	ratio_BA = exp(B1 + B2 + B3 + B4 + B5 + B6 - A1 - A2 - A3 - A4 - A5 - A6)
+	# probability of being class A
+	pA = 1/(1 + ratio_BA)
+	return(pA)
+}
+```
+
+Author identity for an article can be predicted by computing the posterior predictive probability under this model. The model parameters are assumed to follow a Dirichlet prior with parameter alpha. Using this model above we can calculate the posterior probability that a given test article was written by author A, based on the training data. 
+
+The input to this function is: 
+  - the Dirichlet parameter alpha
+  - the total word counts from all articles by author A in the training set
+  - the total word counts from all articles by author B in the training set 
+  - the word counts for the new test article 
+  
+The output is the posterior probability that the test article was written by author A, if p > 0.5, and B otherwise. 
+
+Pseudocode: 
+Create log function to generate number for each article in test set.
+Create log_loss total varaiable and set = 0.
+Set alpha = 1.
+Create yA and yB variables with training set values.
+For each row in test, generate y_til and call DMPM function to get probability.
+If p > 0.5 --> 1, else 0 .
+Based on this and probability, run log loss function and append this number to total sum.
+Find overall accuracy by summing all the loss functions . 
+
+```{r}
+
+##### Functions: 
+
+## posterior_pA above generates probabilities for a single case.
+## here we wrap it so you can calculate probabilities for a data.frame of cases.
+author_probability = function(data, author, alpha) {
+    y <- lapply(split(data, author),
+                function(x) {
+                    apply(x, 2, sum)
+                })
+    yA <- y[[1]]
+    yB <- y[[2]]
+    pA <- apply(data, 1, function(x) {
+        posterior_pA(alpha = alpha,
+                     yA = yA,
+                     yB = yB,
+                     y_til = x)
+    })
+    pA
+}
+
+MultiLogLoss <- function(act, pred){
+  eps <- 1e-15
+  pred <- pmin(pmax(pred, eps), 1 - eps)
+  sum(act * log(pred) + (1 - act) * log(1 - pred)) * -1/NROW(act)
+}
+
+## confusion matrix, as proportions.
+confmat <- function(actual, predicted) {
+    addmargins(
+        prop.table(
+            table(actual, predicted),
+            margin = 1),
+        margin = 2)
+}
+
+#####
+
+# probabilities dataframe for test dataset 
+pa1 <- author_probability(test[-1], test[1], alpha = 1)
+pa1 <- c(pa1)
+
+confmat(test$V1,
+        factor(pa1 < .5,
+               labels = c("Alan", "Aaron")))
+
+act_test <- c(test[,1]) # try to convert to 0, 1 
+act_test <- ifelse(act_test == 1, 1, 0)
+
+MultiLogLoss(act_test,pa1)
+```
+
+We see here that using an alpha = 1 gives up a log loss of 0.077. This indicates that the classifier is relatively confident in the deciisons it's making. When the classifier is confident in its class decisions, the Log Loss is reduced to a small number, and we see this in the resulting 0.077 Log Loss value. 
+
+Next, we want to determine alpha by tuning it via cross-validation on the training set under the log-loss. Again, the smaller the log loss value, the more confident we are in our classifier and consequently, in the alpha. 
+
+```{r}
+# Determine alpha by tuning via cross-validation on training set under log-loss
+
+alpha_values = seq(.005, 1.5, .05)
+# k from 1 to 5
+#  Function for k-fold cross-validation to tune alpha parameter under log-loss 
+crossval_logloss = function(train, alpha_values, k) {
+  # Input: 
+  #   Training data frame: 'train', 
+  #   Vector of alpha parameter values: 'alpha_values', 
+  #   Number of CV folds: 'k'
+  # Output: 
+  #   Vector of log-loss values for the provided parameters: 'cv_logloss'
+  
+  num_param = length(alpha_values)
+  set.seed(102)
+
+  # Divide training set into k folds by sampling uniformly at random
+  # folds[s] has the fold index for train instance 's'
+  folds = sample(1:k, nrow(train), replace = TRUE) 
+  
+  cv_logloss1 = rep(0., num_param) # Store cross-validated logloss for different parameter values
+  
+  # Iterate over alpha values
+  for(i in 1:num_param){
+    # Iterate over folds
+    cv_logloss = rep(0., k) # Store cross-validated logloss for different parameter values
+    for(j in 1:k){
+      
+      traincv <- train[folds!=j, ]
+      
+      pa1 <- author_probability(traincv[-1], traincv[1], alpha = alpha_values[i])
+      pa1 <- c(pa1)
+      
+      act_train <- c(traincv[,1]) # try to convert to 0, 1
+      act_train <- ifelse(act_train == 1, 1, 0)
+      
+      MultiLogLoss(act_train,pa1)
+      
+      cv_logloss[j] <-  MultiLogLoss(act_train,pa1)
+    }
+  
+    cv_logloss1[i] <- (mean(cv_logloss))
+  }
+  
+  # Return cross-validated
+  return(cv_logloss)
+}
+
+
+crossval_logloss1 <- crossval_logloss(train, alpha_values, 20) 
+crossval_logloss1
+min(crossval_logloss1)
+which.min(crossval_logloss1)
+alpha_values
+
+
+# How does this compare with Naive Bayes Classifier? 
+pa1 <- author_probability(test[-1], test[1], alpha = 0.355)
+pa1 <- c(pa1)
+
+table1 <- confmat(test$V1,
+        factor(pa1 < .5,
+               labels = c("Aaron", "Alan")))
+
+one <- as.numeric(table1[1,1]) 
+two <- as.numeric(table1[2,2])
+# Overall accuracy
+(one + two)/2
+```
+
+An alpha = 1 setting implies that the Dirichlet prior distributions are directly related to the first degree of all theta parameters. Alpha is the prior controlling how much you weigh previously selected groups when selecing a new equal chance from the beginning and there is no prior information to sway this. 
+
+Using cross validation, I determined the optimal value of alpha to be the 8th alpha in my sequence, alpha = 0.355. This alpha corresponds to a log-loss prediction error of 0.0009. 
+
+For this optimal value of alpha, the accuracies obtained, based on 0 - 1 loss, are much higher than compared with the previous Naive Bayes classifier. With the latter, we obtained 77% accuracy wherease with the cross validation alpha, we obtain 97% accuracy. 
+
+# Part 1c: Monte-Carlo Posterior Predictive Inference
+
+```{r}
+# This function is an approximation of the above exact calculation of p(A|Data):
+#
+# 1. Make sure to install the MCMCpack and MGLM packages to use this funciton
+#
+# 2. It isn't written very efficiently, notice that a new simulation from posterior 
+#   is drawn each time. A more efficient implementation would be to instead 
+#   simulate the posteriors (post_thetaA, etc.) once and hand them to
+#   approx_posterior_pA to calculate the probability.
+
+approx_posterior_pA = function(alpha = 1, yA = NULL, yB = NULL, y_til = NULL, n.sim = NULL){
+	# number of features
+	K = length(yA)
+	alpha0 = rep(alpha, K)
+	# simulate parameters from the posterior of the Dirichlet-Multinomial model
+	post_thetaA = MCmultinomdirichlet(yA, alpha0, mc = n.sim)
+	post_thetaB = MCmultinomdirichlet(yB, alpha0, mc = n.sim)
+	# calculate the likelihood of the observation y_til under simulated posteriors
+	# note: ddirm calculates by-row likelihoods for (data, parameter) pairs
+	y_til_mat = matrix(rep(y_til, n.sim), nrow = n.sim, byrow = TRUE)
+	likeA = exp(ddirm(y_til_mat, post_thetaA))
+	likeB = exp(ddirm(y_til_mat, post_thetaB))
+	# integrate over simulated parameters
+	marginal_pA = sum(likeA)
+	marginal_pB = sum(likeB)
+	# calculate probability of A
+	pA = marginal_pA/(marginal_pA + marginal_pB)
+
+	return(pA)
+}
+
+author_probability2 = function(data, author, alpha, sim) {
+    y <- lapply(split(data, author),
+                function(x) {
+                    apply(x, 2, sum)
+                })
+    yA <- y[[1]]
+    yB <- y[[2]]
+    pA <- apply(data, 1, function(x) {
+        approx_posterior_pA(alpha = alpha,
+                     yA = yA,
+                     yB = yB,
+                     y_til = x, n.sim= sim)
+    })
+    pA
+}
+
+# Try simulation = 100 
+pa1 <- author_probability2(test[-1], test[1], alpha = 0.355, sim=100)
+pa1 <- c(pa1)
+table1 <- confmat(test$V1,
+        factor(pa1 < .5,
+               labels = c("Aaron", "Alan")))
+one <- as.numeric(table1[1,1]) 
+two <- as.numeric(table1[2,2])
+# Overall accuracy
+(one + two)/2
+act_test <- c(test[,1]) # try to convert to 0, 1 
+act_test <- ifelse(act_test == 1, 1, 0)
+MultiLogLoss(act_test,pa1) 
+
+
+# Try simulation = 1000 
+pa1 <- author_probability2(test[-1], test[1], alpha = 0.355, sim=1000)
+pa1 <- c(pa1)
+table1 <- confmat(test$V1,
+        factor(pa1 < .5,
+               labels = c("Aaron", "Alan")))
+(one + two)/2
+MultiLogLoss(act_test,pa1) 
+
+# Try simulation = 500 
+pa1 <- author_probability2(test[-1], test[1], alpha = 0.355, sim=500)
+pa1 <- c(pa1)
+table1 <- confmat(test$V1,
+        factor(pa1 < .5,
+               labels = c("Aaron", "Alan")))
+(one + two)/2
+MultiLogLoss(act_test,pa1) 
+
+# Try simulation = 10000 
+#pa1 <- author_probability2(test[-1], test[1], alpha = 0.355, sim=10000)
+#pa1 <- c(pa1)
+#table1 <- confmat(test$V1,
+ #       factor(pa1 < .5,
+ #              labels = c("Aaron", "Alan")))
+#MultiLogLoss(act_test,pa1) 
+
+
+```
+
+We notice that we get a lower prediction error using 1000 simulations compared to using 100 simulations. If we try 10, 100, 1000, and 10000 simulations we see that increasing the number of simulations does not drastically decrease the prediction error. Out of 1000, 500, and 100 simulations, 100 simulations gives the lowest prediction error. I was able to match the test accuracy in part 1b also with 100 simulations. Increasing the number of simulations did not have a noticeable effect on the model's predictive accuracy. It is time consuming to determine the posterior distribution and summarizing it can be impossible. Increasing doesn't increase the predictive accuracy by much becasue the simulated sample is large enough to have the same trend that the actual data would have.  
+
+#Part 1d: Author vocabulary analysis
+
+```{r}
+# This function claculates an approximation to E[R_k|data] described above. 
+posterior_mean_R = function(alpha = 1, yA = NULL, yB = NULL, n.sim = NULL){
+	# number of features
+	K = length(yA)
+	alpha0 = rep(alpha, K)
+	# posterior parameter values	
+	post_thetaA = MCmultinomdirichlet(yA, alpha0, mc = n.sim)
+	post_thetaB = MCmultinomdirichlet(yB, alpha0, mc = n.sim)
+	# empirical values of R_k
+	R = post_thetaA/(post_thetaA + post_thetaB)
+	# calculate approximation to E[R_k|data]
+	ER = apply(R, 2, mean)
+	return(ER)
+}
+
+```
+
+We can also approximate the posterior distribution of the ratio of multinomial model parameters (relative ratio) for one author relative to the other, and identify the words that receive high values of this ratio. The largest Rk this would indicate high relative usage of a word for author A while the smaller values would indicate the same instead for author B.
+
+```{r}
+
+yA <- colSums(train[1:50,2:100])
+yB <- colSums(train[51:100,2:100])
+
+
+author_vocab_mat <- posterior_mean_R(alpha = 0.355, yA = yA, yB = yB, n.sim = 100)
+author_vocab <- order(author_vocab_mat)
+authorA <- author_vocab[1:25]
+authorB <- author_vocab[75:99]
+
+for (word in authorA) {
+  word <- as.numeric(word)
+  word1 <- words[word,1]
+  #print(word1)
+}
+
+for (word in authorB) {
+  word <- as.numeric(word)
+  word1 <- words[word,1]
+  #print(word1)
+}
+
+order(authorA)
+order(authorB)
+
+```
+
+Given the above explanation and code, E[Rk] can be interpreted as the Monte Carlo approximation of the posterior distribution of this data if we had simulated this data and analyzed the results. Officially, it represents the posterior mean. If we create a simulation of this data assuming the posterior distribution, E[Rk] is what we would expect the center of the distribution to be. 
+
+No, there are not many visible differences in the authors' choice of vocabulary; the authors do have many words in common. For example, both authors use the numbers '14', '15', '1933' and '1994' frequently. They also both use the word 'cheap' often. 
+
+
+#Problem 2: Bayesian Logisitic Regression
+```{r, warning=FALSE}
+# import data
+train_wo = read.csv("CS109b-hw3_datasets/dataset_2_train.txt", header=TRUE)
+test_wo = read.csv("CS109b-hw3_datasets/dataset_2_test.txt", header=TRUE)
+
+# create 2 new dataframes: one with contraceptive use and one without
+cu <- train_wo[train_wo$contraceptive_use == 1, ]
+no_cu <- train_wo[train_wo$contraceptive_use == 0, ]
+
+#### Visualizations ####
+
+p2 <- ggplot(cu, mapping = aes(x = district)) + geom_histogram() +
+  labs(x = 'District', title ='District vs. Contraceptive Use') 
+p2
+
+p <- ggplot(no_cu, mapping = aes(x = district)) + geom_histogram() +
+  labs(x = 'District', title ='District vs. No Contraceptive Use') 
+p
+
+# Logistic Regression Models 
+
+mod1 <- glm(contraceptive_use ~ ., family=binomial(link = "logit"), data=train_wo)
+summary(mod1)
+
+mod2 <- glm(contraceptive_use ~ urban + living.children + age_mean, family=binomial(link = "logit"), data=train_wo)
+summary(mod2)
+
+anova(mod2, mod1, test="Chisq")
+
+```
+
+
+
+We see in the histograms that there is a difference among districts as to whether or not women are using contraceptives. However, this does not mean that we should make a different logistic regression model for each district but rather it means that we should incorportate district as a factor in our classifier. 
+
+
+When running an anova table we get a very statistically significant result supporting model 2, which includes the district as a factor in the classification model to predict whether or not a woman uses contraceptives. 

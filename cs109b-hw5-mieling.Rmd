@@ -1,0 +1,439 @@
+---
+title: Homework 5 - PCA, SVM & Clustering
+subtitle: "Harvard CS109B, Spring 2017"
+author: "Isabelle Mieling"
+output: pdf_document
+urlcolor: blue
+linkcolor: blue
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# load libraries
+library(ggplot2)
+library(ggfortify)
+library(factoextra)
+library(cluster)
+library(corrplot)
+library(NbClust)
+library(mclust)
+library(dbscan)
+library(MASS) 
+library(e1071)
+
+```
+
+
+# Problem 1: Face recoginition
+
+In this problem, the task is to build a facial recognition system using Principal Components Analysis (PCA) and a Support Vector Machine (SVM). We provide you with a collection of grayscale face images of three political personalities "George W. Bush", "Hugo Chavez" and "Ariel Sharon", divided into training and test data sets. Each face image is of size $250 \times 250$, and is flattened into a vector of length 62500.  The goal is to fit a face detection model to the training set, and evaluate its classification accuracy (i.e. fraction of face images which were recognized correctly) on the test set.
+
+One way to perform face recognition is to treat each pixel in an image as a predictor, and fit a classifier to predict the identity of the person in the image. Do you foresee a problem with this approach?
+
+## Yes, I forsee a problem with this approach! 
+Using this approach, pixels, which represent square areas of the image, will be used as predictors. This idea is used under the assumption that the faces take up the exact same space in each image and will be the same size. In other words, for George W. Bush, we would assume the 85th pixel to represent a part of Bush's hair and therefore, if the 85th pixel for each test image will be the same greyscale, it will represent him. This will cause a problem because face images do not represent the exact same representation of these three figures. A face may not be centered in one image and may be slightly larger in another image and these differences may cause problems if we use pixels as predictors. 
+
+Instead we recommend working with low-dimensional representations of the face images computed using PCA. This can be done by calculating the top $K$ principal components (PCs) for the vectorized face images in the training set, projecting each training and test image onto the space spanned by the PC vectors, and represent each image using the $K$ projected scores. The PC scores then serve as predictors for fitting a classification model. Why might this approach of fitting a classification model to lower dimensional representations of the images be more beneficial?
+
+## Answer:
+This approach of fitting a classification model to lower dimensional representations of the images will be more beneficial because these lower dimensions take into account the variance in the images which makes more sense for images instead of using each pixel as a characteristic, as explained above. In this way, the aspects of the images which express the largest variance among the images can be used to identify them. Also, having less predictors is easier and makes interpretation easier. It is easier to interpret what the largest variability among the images means (first principal component) compared to the 85th pixel. 
+
+The following function takes a vectorized version of an image and plots the image in its original form:
+
+```{r}
+rot90 <- function(x, n = 1){
+  #Rotates 90 degrees (counterclockwise)
+  r90 <- function(x){
+    y <- matrix(rep(NA, prod(dim(x))), nrow = nrow(x))
+    for(i in seq_len(nrow(x))) y[, i] <- rev(x[i, ])
+    y
+  }
+  for(i in seq_len(n)) x <- r90(x)
+  return(x)
+}
+plot.face = function(x,zlim=c(-1,1)) {
+  #Plots Face given image vector x
+  x = pmin(pmax(x,zlim[1]),zlim[2])
+  cols = gray.colors(100)[100:1]
+  image(rot90(matrix(x,nrow=250)[,250:1],3),col=cols,
+        zlim=zlim,axes=FALSE)  
+}
+```
+
+
+```{r import, results="hold"}
+# import data
+data <- load('CS109b-hw5-dataset_1.Rdata')
+
+# vectorized images available as rows : 
+imgs_train[1:3,1:10 ]
+imgs_test[1:3,1:10 ]
+# identity of person in each image : labels_test , labels_train
+
+```
+
+* Apply PCA to the face images in `imgs_train`, and identify the top 5 principal components. Each PC has the same dimensions as a vectorized face image in the training set, and can be reshaped into a 250 x 250 image, referred to as an *Eigenface*. Use the code above to visualize the Eigenfaces, and comment on what they convey. 
+
+```{r PCA, warning= FALSE, message=FALSE}
+
+# as we saw from above, we will need to standardize the variables before doing PCA 
+data.pca <- prcomp(imgs_train, scale=TRUE)
+#summary(data.pca)
+plot(data.pca)
+## NOTE: for some reason this plot shows up as a plot from later in my code on the output!!! 
+
+head(unclass(data.pca$rotation)[, 1:5])
+
+# identify the top 5 principal components 
+PC1 <- (data.pca$rotation[ , 1])*500
+PC2 <- (data.pca$rotation[ , 2])*500
+PC3 <- (data.pca$rotation[ , 3])*500
+PC4 <- (data.pca$rotation[ , 4])*500
+PC5 <- (data.pca$rotation[ , 5])*500
+
+```
+
+```{r eigen1 ,warning= FALSE, message=FALSE}
+plot.face(PC1) 
+```
+
+##This shows the face as being light and the background as dark.
+
+``` {r eigen2, warning= FALSE, message=FALSE}
+plot.face(PC2) 
+```
+
+## This shows the face and part of the top background as being dark while the bottom background is light. It looks as if light is being shined on the face from the right side.
+
+```{r eigen3, warning= FALSE, message=FALSE}
+plot.face(PC3) 
+```
+
+## Here the face is indistinguishable. All we see is a very light face.
+
+```{r eigen4,warning= FALSE, message=FALSE}
+plot.face(PC4) 
+```
+
+## Here we see the facial features: eyes and what could be glasses, a nose, and a slgihtly open mouth.
+
+```{r eigen5, warning= FALSE, message=FALSE}
+plot.face(PC5)
+```
+
+## Interestingly enoguh, this Eigenface looks the most like a face. We see the facial features as well as some shading. 
+
+```{r eigen, warning= FALSE, message=FALSE}
+# variance retained by each principal component 
+eig.val <- get_eigenvalue(data.pca)
+head(eig.val)
+```
+
+* Retain the top PCs that contribute to 90% of the variation in the training data. How does the number of identified PCs compare with the total number of pixels in an image? Compute the PC scores for each image in the training and test set, by projecting it onto the space spanned by the PC vectors.
+
+```{r topPcs, warning= FALSE, message=FALSE}
+
+vars <- apply(data.pca$x, 2, var)
+props <- vars/sum(vars)
+cumsum(props)
+# This gives the cumulative variance for each of the principal components 
+
+```
+
+The top 109 principal components contribute to 90% of the variance in the training data. This is much less than the number of pixels the image has. This relates back to the questions we addressed earlier about using the pixels as the predictors. This method of using PCA and lowering dimensionality still leaves us with 109 principal components/predictrs but this is much less than the number of pixels. 
+
+* Treating the PC scores as predictors, fit a SVM model to the  the training set, and report the classification accuracy of the model on the test set. How does the accuracy of the fitted model compare to a naïve classifier that predicts a random label for each image?
+
+```{r svm, warning=FALSE, message=FALSE}
+
+mod1 <- svm(props, data=imgs_train)
+predict(mod1, data=imgs_test)
+```
+
+# Problem 2: Analyzing Voting Patterns of US States
+
+In this problem, we shall use unsupervised learning techniques to analyze voting patterns of US states in six presidential elections. The data set for the problem is provided in the file `CS109b-hw5-dataset_2.txt`. Each row represents a state in the US, and contains the logit of the relative fraction of votes cast by the states for Democratic presidential candidates (against the Republican candidates) in elections from 1960 to 1980. The logit transformation was used to expand the scale of proportions (which stay between 0 and 1) to an unrestricted scale which has more reliable behavior when finding pairwise Euclidean distances.  Each state is therefore described by 6 features (years). The goal is to find subgroups of states with similar voting patterns. 
+
+```{r data2, warning=FALSE, message=FALSE}
+vote = read.table("CS109b-hw5-dataset_2.txt", header=TRUE)
+```
+
+# Part 2a: Visualize the data
+Generate the following visualizations to analyze important characteristics of the data set:
+
+- Rescale the data, and compute the Euclidean distance between each pair of states. Generate a heat map of the pair-wise distances 
+- Apply multi-dimensional scaling to the pair-wise distances, and generate a scatter plot of the states in two dimension  
+- Apply PCA to the data, and generate a scatter plot of the states using the first two principal components  
+
+Summarize the results of these visualizations. What can you say about the similarities and differences among the states with regard to voting patterns?  By visual inspection, into how many groups do the states cluster?
+
+```{r twoA , warning=FALSE, message=FALSE}
+
+# rescale the observations
+vote.scaled <- scale(vote)
+
+# Euclidean pairwise distances on scaled observations
+dist.eucl = daisy(vote.scaled, metric = "euclidean", stand=T) 
+# stand is true becuase the measurements in x are standardized before calculating the disimilarities
+round(as.matrix(dist.eucl)[1:6, 1:6], 1) # visualize a matrix of the Euclidean distances of the rescaled data
+
+fviz_dist(dist.eucl,
+   gradient = list(low = "#00AFBB", mid = "white", high = "#FC4E07"))
+
+```
+
+```{r mds, warning= FALSE, message=FALSE}
+
+# multidimensional scaling 
+vote.mds <- cmdscale(dist.eucl, k = 2)  # set k=2 becuase we are doing this in 2 dimensions 
+votes <- data.frame(vote, mds.num = vote.mds )
+
+vote.mds <- cmdscale(dist(vote.scaled), k = 2)  # set k=2 becuase we are doing this in 2 dimensions 
+votes <- data.frame(vote, mds.num = vote.mds )
+
+ggplot(votes,
+       mapping = aes(x = mds.num.1,
+                     y = mds.num.2)) +
+  geom_point() + ggtitle('ScatterPlot of States Using first 2 Principal Components')
+
+```
+
+```{r pca, warning= FALSE, message=FALSE}
+# apply PCA to data & generate scatter plot of first 2 PC 
+vote.pca <- prcomp(vote.scaled)
+autoplot(vote.pca) +ggtitle("First two principal components of state voting data") + geom_density2d()
+
+```
+
+At first glance, these seem to cluster into 1 category and do not seem to separate particularly well. 
+
+# Part 2b: Partitioning clustering
+Apply the following partitioning clustering algorithms to the data:
+
+- **K-means clustering** 
+- **Partitioning around medoids (PAM)**
+
+In each case, determine the optimal number of clusters based on the Gap statistic, considering 2 to 10 clusters.  Also determine the choice of the optimal number of clusters by producing elbow plots.  Finally, determine the optimal number of clusters using the method of average silhouette widths with argument.  Do the choices of these three methods agree?  If not, why do you think you are obtaining different suggested numbers of clusters?
+
+With your choice of the number of clusters, construct a principal components plot the clusters for *K-means* and *PAM*. Are the clusterings the same?  Summarize the results of the clustering including any striking features of the clusterings.
+
+Generate silhouette plots for the *K-means* and *PAM* clusterings with the optimal number of clusters.  Identify states that may have been placed in the wrong cluster
+
+```{r kmeansPam, warning= FALSE, message=FALSE}
+
+# Gap statistic for kmeans 
+gapstat = clusGap(vote.scaled,FUN=kmeans,nstart=25,K.max=10,B=500, d.power = 2)
+## note, I am using d.power=2, which corresponds to what Tibshirani et al had proposed
+# however, still getting only 1 cluster with d.power = 2
+print(gapstat, method="Tibs2001SEmax")
+fviz_gap_stat(gapstat, 
+  maxSE=list(method="Tibs2001SEmax",SE.factor=1)) + 
+  ggtitle("K-means clustering for state voting data - optimal number of clusters") 
+## this gives 1 cluster 
+
+# Gap statistic for PAM
+gapstat = clusGap(scale(USArrests),FUN=pam,K.max=10,B=500, d.power = 2)
+print(gapstat, method="Tibs2001SEmax")
+fviz_gap_stat(gapstat,
+  maxSE=list(method="Tibs2001SEmax",SE.factor=1)) + 
+  ggtitle("PAM clustering for state voting data - optimal number of clusters") 
+## this gives 2 clusters 
+
+# elbow method for selecting clusters from kmeans
+fviz_nbclust(vote.scaled, kmeans, method="wss") + 
+  ggtitle("K-means clustering for state voting data - optimal number of clusters") +
+  geom_vline(xintercept=6,linetype=2) 
+#The value of K where the bend occurs is considered the appropriate number of clusters.
+## this gives 6 clusters
+
+# elbow method for selecting clusters from PAM
+fviz_nbclust(vote.scaled, pam, method="wss") + 
+  ggtitle("PAM clustering for state voting data - optimal number of clusters") +
+  geom_vline(xintercept=5,linetype=2)
+## this gives 5 clusters
+
+# silhouette method for selecting clusters from kmeans
+fviz_nbclust(vote.scaled,kmeans,method="silhouette") +
+  ggtitle("K-means clustering for state voting data - optimal number of clusters")
+## this gives 7 clusters
+
+# silhouette method for selecting clusters from PAM
+fviz_nbclust(scale(USArrests),pam,method="silhouette") +
+  ggtitle("PAM clustering for violent crimes - optimal number of clusters") 
+## this gives 2 clusters
+
+# k-means clustering
+# need to prespecify number of clusters from kmeans : choose 6
+vote.km <- kmeans(vote.scaled, 6, nstart=25)
+print(vote.km)
+print(aggregate(vote, by=list(cluster=vote.km$cluster), mean))
+
+fviz_cluster(vote.km, data = vote.scaled,
+  main="K-means clustering of state voting data")
+
+# PAM clustering from PAM
+vote.pam <- pam(vote.scaled, 6)
+print(vote.pam)
+
+fviz_cluster(vote.pam, main="PAM clustering of state voting data")
+
+# silhouette plot | PAM
+fviz_silhouette(silhouette(vote.pam),
+  main="Silhouette plot for PAM clustering")
+
+# Compute silhouette
+sil <- silhouette(vote.pam)[, 1:3]
+# Objects with negative silhouette
+neg_sil_index <- which(sil[, 'sil_width'] < 0)
+sil[neg_sil_index, , drop = FALSE]
+
+# silhouette plot | kmeans
+fviz_silhouette(silhouette(vote.km$cluster, dist(vote.scaled)),
+  main="Silhouette plot for K Means clustering")
+
+# Compute silhouette
+sil <- silhouette(vote.km$cluster, dist(vote.scaled))
+# Objects with negative silhouette
+neg_sil_index <- which(sil[, 'sil_width'] < 0)
+sil[neg_sil_index, , drop = FALSE]
+
+```
+
+## Clustering analysis: 
+The Gap statistic for k means gives 1 cluster. The Gap statistic for PAM gives 2 clusters. The elbow method for k means gives 6 clusters and that for PAM gives 5 clusters. The Silhouette method from k menas gives 7 clusters and that for PAM gives 2 clusters. As we can see, these methods give many different numbers of clusters. This makes sense because when we initially visually explored the data, we did not see any clear clusters. The original data seemed to all fall into 1 large cluster. Therefore, there is no clear number of clusters for these algorithms to choose from and they choose the ideal number of clusters in different ways. The choices of these 3 methods do not agree. Finally, when constructing the principal components plot the clusters for *K-means* and *PAM* we see that the clusters are similar but not quite the same. We also get similar results from the silhouette plots. 
+
+States that may have been placed in the wrong cluster include: Tennessee, Florida, Virginia, New York, Maryland, Connecticut, Michigan and Pennsylvania. 
+
+# Part 2c: Hierarchical clustering
+
+Apply the following hierarchical clustering algorithms to the data:
+
+- **Agglomerative clustering** with Ward's method 
+- **Divisive clustering** 
+
+In each case, summarize the results using a dendogram.  
+Determine the optimal number of clusters using Gap statistic, and add rectangles to the dendrograms sectioning off clusters (*Hint:* use `rect.hclust`).  Do you find that states that predominantly vote for Republicans (e.g., Wyoming, Idaho, Alaska, Utah, Alabama) are closer together in the hierarchy? What can you say about states that usually lean towards Democrats (e.g. Maryland, New York, Vermont, California, Massachusetts)?  Comment on the quality of clustering using Silhouette diagnostic plots. 
+
+*Hint:* The following code will help you reformat the output of the `agnes` and `diana` functions in order to apply the presented methods to find the optimal number of clusters:
+
+```{r twoC, warning= FALSE, message=FALSE}
+agnes.reformat<-function(x, k){
+# x: Data matrix or frame, k: Number of clusters
+  x.agnes = agnes(x,method="ward",stand=T)
+  x.cluster = list(cluster=cutree(x.agnes,k=k))
+  return(x.cluster)
+}
+
+diana.reformat<-function(x, k){
+# x: Data matrix or frame, k: Number of clusters
+  x.diana = diana(x,stand=T)
+  x.cluster = list(cluster=cutree(x.diana,k=k))
+  return(x.cluster)
+}
+```
+
+```{r agnesDiana, warning= FALSE, message=FALSE}
+# Agglomerative clustering with ward's method 
+vote.agnes <- agnes(vote.scaled, metric='manhattan', method='ward', stand=T)
+pltree(vote.agnes, cex=0.5, hang= -1,
+  main="AGNES fit (Ward's method) of state voting data",
+  xlab="State",sub="")
+
+# Divisive clustering using diana
+vote.diana <- diana(vote.scaled, stand=T)
+pltree(vote.diana, cex=0.5, hang= -1,
+  main="DIANA fit of state voting data",
+  xlab="State",sub="")
+
+
+fviz_cluster(list(cluster = cutree(vote.agnes, k=2), data = vote.scaled))
+fviz_cluster(list(cluster = cutree(vote.agnes, k=4), data = vote.scaled))
+
+fviz_cluster(list(cluster = cutree(vote.diana, k=2), data = vote.scaled))
+fviz_cluster(list(cluster = cutree(vote.diana, k=4), data = vote.scaled))
+
+
+
+
+
+# principal components plot with groupings
+#grp.agnes = cutree(arrests.agnes, k=4)
+#fviz_cluster(list(data = scale(USArrests), cluster = grp.agnes),
+ # main="AGNES fit - 4 clusters")
+#grp.diana = cutree(arrests.diana, k=4)
+#fviz_cluster(list(data = scale(USArrests), cluster = grp.diana),
+#  main="DIANA fit - 4 clusters")
+
+
+
+
+
+
+```
+
+Based on your choice of the optimal number of clusters in each case, visualize the clusters using a principal components plot, and compare them with the clustering results in Part 2b.
+
+# Part 2d: Soft clustering
+We now explore if soft clustering techniques can produce intuitive grouping.  Apply the following methods to the data:
+
+- **Fuzzy clustering** 
+- **Gaussian mixture model** 
+
+For the fuzzy clustering, use the Gap statistic to choose the optimal number of clusters. For the Gaussian mixture model, use the internal tuning feature in `Mclust` to choose the optimal number of mixture components.
+
+Summarize both sets of results using both a principal components plot, and a correlation plot of the cluster membership probabilities. Compare the results of the clusterings.  Comment on the membership probabilities of the states. Do any states have membership probabilities approximately equal between clusters? For the fuzzy clustering, generate a silhouette diagnostic plot, and comment on the quality of clustering.
+
+
+```{r fuzzy, warning= FALSE, message=FALSE}
+## Fuzzy clustering - fanny (6 clusters)
+# chose 6 clusters according to the gap statistics used above 
+vote.fanny = fanny(vote.scaled,k=6)
+print(head(round(vote.fanny$membership,3),15))
+fviz_cluster(vote.fanny,
+  main="FANNY fit - 6 clusters")
+ 
+corrplot(vote.fanny$membership[1:15,], is.corr=F)
+corrplot(vote.fanny$membership[15:30,], is.corr=F)
+corrplot(vote.fanny$membership[30:45,], is.corr=F)
+corrplot(vote.fanny$membership[45:50,], is.corr=F)
+
+## Gaussian mixture model
+vote.mc = Mclust(vote)
+print(summary(vote.mc))
+# optimal number of clusters
+print(vote.mc$G)
+# estimated probability for an observation to be in each cluster
+print(head(round(vote.mc$z,3)))
+fviz_cluster(vote.mc, frame.type="norm", geom="point") +
+  ggtitle("State Voting Data - Bivariate normal mixture model G=3")
+
+
+```
+
+# Part 2e: Density-based clustering
+Apply DBSCAN to the data with `minPts = 5`. Create a knee plot to estimate `eps`.  Summarize the results using a principal components plot, and comment on the clusters and outliers identified.  How does the clustering produced by DBSCAN compare to the previous methods?
+
+```{r density, warning= FALSE, message=FALSE}
+
+kNNdistplot(vote, k=5)+
+abline(0.8,0,lty=2,lwd=2,col="red") + # added after seeing kNN plot
+title(sub="Knee at around y=0.8",main="Knee plot for state voting data")
+
+vote.db = dbscan(vote, eps=0.8, minPts = 5)
+fviz_cluster(vote.db, vote, stand = FALSE, ellipse = FALSE, geom = "point") +
+  ggtitle("DBSCAN clustering of data with eps=0.8 and minPts=5")
+
+kNNdistplot(vote.scaled,k=4) +
+abline(2.4,0,lty=2,lwd=2,col="red") + # added after seeing kNN plot
+title(sub="Knee at around y=2.5",main="Knee plot for state voting data")
+
+vote.db = dbscan(vote.scaled,eps=2.4, minPts=5)
+fviz_cluster(vote.db, vote.scaled, 
+  stand = FALSE, ellipse.type = "convex", geom = "point") +
+  ggtitle("DBSCAN clustering of state voting data with eps=2.4 and minPts=5")
+
+
+```
+
+Here we used density-based clustering. A density-based cluster is defined as a group of density-connected points. We compute the k-nearest neighbor distances in a matrix of points, plot the average distances in a sorted order, then look for a bend in the plot and use the distance at this bend (the "knee") as the choice of eps. We used k=4 to calculate k-nearest neighbor distances. We see from the knee plot that the eps falls around 2.4. This results in 1 density-based cluster and 4 outliers, similar to what we saw in lecture for the violent crimes dataset. This is similar to some of the previous methods where we also got 1 cluster. 

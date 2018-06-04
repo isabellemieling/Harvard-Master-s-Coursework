@@ -1,0 +1,281 @@
+---
+title: "CS109b_homework1"
+author: "Isabelle Mieling"
+date: "February 8, 2017"
+output: pdf_document
+---
+
+# Problem 1: Predicting Taxi Pickups
+### Task is to build a regression model that can predict the number of taxi pickups in New York city at any given time of the day. 
+
+### Given in homework questions
+```{r eval=FALSE}
+
+# Function for k-fold cross-validation to tune span parameter in loess
+crossval_loess = function(train, param_val, k) {
+  # Input: 
+  #   Training data frame: 'train', 
+  #   Vector of span parameter values: 'param_val', 
+  #   Number of CV folds: 'k'
+  # Output: 
+  #   Vector of R^2 values for the provided parameters: 'cv_rsq'
+  
+  num_param = length(param_val) # Number of parameters
+  set.seed(109) # Set seed for random number generator
+  
+  # Divide training set into k folds by sampling uniformly at random
+  # folds[s] has the fold index for train instance 's'
+  folds = sample(1:k, nrow(train), replace = TRUE) 
+  
+  cv_rsq = rep(0., num_param) # Store cross-validated R^2 for different parameter values
+  
+  # Iterate over parameter values
+  for(i in 1:num_param){
+    # Iterate over folds to compute R^2 for parameter
+    for(j in 1:k){
+      # Fit model on all folds other than 'j' with parameter value param_val[i]
+      model.loess = loess(PickupCount ~ TimeMin, span = param_val[i], 
+                          data = train[folds!=j, ], 
+                          control = loess.control(surface="direct"))
+  
+      # Make prediction on fold 'j'
+      pred = predict(model.loess, train$TimeMin[folds == j])
+      
+      # Compute R^2 for predicted values
+      cv_rsq[i] = cv_rsq[i] + rsq(train$PickupCount[folds == j], pred)
+    }
+    
+    # Average R^2 across k folds
+    cv_rsq[i] = cv_rsq[i] / k
+  }
+  
+  # Return cross-validated R^2 values
+  return(cv_rsq)
+}
+```
+
+
+## Part 1a: Explore different regression models 
+```{r}
+#load libraries  - These libraries will be used in Problem 1 and Problem 2
+library(ggplot2)
+library(gridExtra)
+library(gam)  #This also loads splines() package
+```
+
+```{r results="hold"} 
+# hold all the output pieces and push them to the end of a chunk
+# Load datasets 
+test = read.csv("CS109b-hw1-datasets/dataset_1_test.txt", header = TRUE)
+trains = read.csv("CS109b-hw1-datasets/dataset_1_train.txt", header = TRUE)
+
+# data frames of predictors with only time
+trains.TimeMin <- data.frame(TimeMin = trains$TimeMin)
+test.TimeMin <- data.frame(TimeMin = test$TimeMin)
+
+```
+
+##### Visualize data
+```{r}
+# Plot training set
+ggplot(trains, aes(x =TimeMin, y = PickupCount)) + 
+    geom_point(col="brown") +
+    labs(x="Time in Minutes" , y = "Number of Pickups" ,title="Taxi Pick-ups" ) +
+    theme(plot.title = element_text(hjust = 0.5))
+
+```
+
+
+### 1. Regression models with different basis functions:
+
+#### (i)  Simple polynomials with degrees 5, 10, and 25
+
+**Fit regression models with polynomial basis with degrees 5, 10, and 25 to the train data, visualize, report test $R^2$.**
+
+*But first, ...*
+*Function to calculate $R^2$*
+
+```{r}
+# Function to compute R^2 for observed and predicted responses
+rsq = function(y, predict) {
+  tss = sum((y - mean(y))^2)
+  rss = sum((y-predict)^2)
+  r_squared = 1 - rss/tss
+  
+  return(r_squared)
+}
+```
+
+```{r}
+#model1 = lm(PickupCount ~ TimeMin, data = mydata_train)
+#model1[['pred.pickup']] <- predict(model1) # create a new variable in the data frame which is the predicted values 
+
+#ggplot(model1, aes(x=TimeMin, y=PickupCount) ) + geom_point() + #geom_line(aes(y=pred.pickup))
+
+#summary(model1)
+```
+
+A regression model with simple polynomials of degrees 5, 10 and 25
+```{r}
+model2 <- lm(PickupCount ~ poly(TimeMin, degree = 5, raw = TRUE), data = trains)
+model3 <- lm(PickupCount ~ poly(TimeMin, degree = 10, raw = TRUE), data = trains)
+model4 <- lm(PickupCount ~ poly(TimeMin, degree = 25, raw = TRUE), data = trains)
+
+
+# Compute train, test R^2
+  pred_tr <- predict(model.poly_, newdata=train.TimeMin)
+  pred_ts <- predict(model.poly_, newdata=test.TimeMin)
+  
+  tr_rsq = rsq(train$PickupCount, pred_tr)
+  tst_rsq = rsq(test$PickupCount, pred_ts)
+  
+  title_str = sprintf("Poly %d: Train R^2 = %.3f, Test R^2 = %.3f", degree, tr_rsq, tst_rsq)
+
+  # Plot train and test R^2
+  p = ggplot(train,aes(x=TimeMin, y=PickupCount))  + 
+  geom_point() +
+  stat_smooth(method = "lm",formula=y ~ poly(x, degree), col = "deepskyblue3")+
+  scale_x_continuous( breaks=seq(0,1500,200)) + 
+  labs(x="Time in Minutes" , y = "Number of Pickups" ,title=title_str ) +
+  theme(plot.title = element_text(hjust = 0.5,size=9))
+  
+  #returning test R^2 and plot
+  return(list(tst_rsq=tst_rsq,p=p))  
+```
+
+A regression model with cubic B-splines with knots chosen and with natural cubic splines : 
+```{r}
+library(splines)
+model5 <- lm(PickupCount ~ bs(TimeMin, knots = quantile(TimeMin, c(.25, .50, .75))), data = mydata_train)
+summary(model5)
+
+model6 <- lm(PickupCount ~ ns(TimeMin, df=5), data = mydata_train)
+summary(model6)
+```
+
+2. Smoothing spline model with the smoothness parameter chosen by cross-validation on the training set
+
+
+3. Locally-weighted regression model with the span parameter chosen by cross-validation on the training set
+```{r}
+mod.train2 <- loess(PickupCount ~ TimeMin, data = mydata_train) 
+```
+
+*Hints*: 
+  function `smooth.spline` to fit a smoothing spline and the attribute `spar` to specify the smoothness parameter. You may use the function `loess` to fit a locally-weighted regression model and the attribute `span` to specify the smoothness parameter that determines the fraction of the data to be used to compute a local fit. Functions `ns` and `bs` can be found in the `splines` library.  
+
+- For smoothing splines, `R` provides an internal cross-validation feature: this can be used by leaving the `spar` attribute in `smooth.spline` unspecified; you may set the `cv` attribute to choose between leave-one-out cross-validation and generalized cross-validation. For the other models, you will have to write your own code for cross-validation. Below, we provide a sample code for k-fold cross-validation to tune the `span` parameter in `loess`:
+
+```{r}
+# Function to compute R^2 for observed and predicted responses
+rsq = function(y, predict) {
+  tss = sum((y - mean(y))^2)
+  rss = sum((y-predict)^2)
+  r_squared = 1 - rss/tss
+  
+  return(r_squared)
+}
+
+# Function for k-fold cross-validation to tune span parameter in loess
+crossval_loess = function(train, param_val, k) {
+  # Input: 
+  #   Training data frame: 'train', 
+  #   Vector of span parameter values: 'param_val', 
+  #   Number of CV folds: 'k'
+  # Output: 
+  #   Vector of R^2 values for the provided parameters: 'cv_rsq'
+  
+  num_param = length(param_val) # Number of parameters
+  set.seed(109) # Set seed for random number generator
+  
+  # Divide training set into k folds by sampling uniformly at random
+  # folds[s] has the fold index for train instance 's'
+  folds = sample(1:k, nrow(train), replace = TRUE) 
+  
+  cv_rsq = rep(0., num_param) # Store cross-validated R^2 for different parameter values
+  
+  # Iterate over parameter values
+  for(i in 1:num_param){
+    # Iterate over folds to compute R^2 for parameter
+    for(j in 1:k){
+      # Fit model on all folds other than 'j' with parameter value param_val[i]
+      model.loess = loess(PickupCount ~ TimeMin, span = param_val[i], 
+                          data = train[folds!=j, ], 
+                          control = loess.control(surface="direct"))
+  
+      # Make prediction on fold 'j'
+      pred = predict(model.loess, train$TimeMin[folds == j])
+      
+      # Compute R^2 for predicted values
+      cv_rsq[i] = cv_rsq[i] + rsq(train$PickupCount[folds == j], pred)
+    }
+    
+    # Average R^2 across k folds
+    cv_rsq[i] = cv_rsq[i] / k
+  }
+  
+  # Return cross-validated R^2 values
+  return(cv_rsq)
+}
+```
+
+# Part 1b: Adapting to weekends 
+
+Yes, the pattern of taxi pickups differs over the days of the week. Some days of the week experience more fluctuation whereas more have overall more traffic. Similarly, the patterns on the weekends are different from those on the weekdays and as a result of this, we could benefit from using a different regression model for weekdays and weekends. We assume Monday = 1, Tuesday = 2, etc. 
+```{r}
+mydata_train_wd <- mydata_train[mydata_train[,'DayOfWeek'] < 6 ,]
+mydata_train_we <- mydata_train[mydata_train[,'DayOfWeek'] > 5 ,]
+
+
+mod.train1 <- loess(PickupCount ~ TimeMin, data = mydata_train_wd) # default span = 0.75
+mod.train2 <- loess(PickupCount ~ TimeMin, data = mydata_train_we) # default span = 0.75
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+
+# Problem 2: Predicting Crime in the City
+In this problem, the task is to build a model that can predict the per-capita crime rate in a given region of the US. The data set is provided in the files `dataset_2_train.txt` and `dataset_2_test.txt`. Each row corresponds to a region in the US: the first column contains the number of violent crimes per 100K population, and the remaining columns contain 8 attributes about the region. All numeric predictors are normalized into the range 0.00-1.00, and retain their distribution and skew (e.g. the population predictor has a mean value of 0.06 because most communities are small)
+
+
+```{r}
+mydata2 = read.csv("dataset_2_test.txt")
+mydata2_train = read.csv("dataset_2_train.txt")
+```
+
+Examine the relationship between the crime rate and the individual predictors visually. Do some of the predictors have a non-linear relationship with the response variable, warranting the use of a non-linear regression model?
+
+# Part 2a: Polynomial regression
+
+* Linear regression
+* Regression with polynomial basis functions of degree 2 (i.e. basis functions $x$, $x^2$ for each predictor $x$)
+* Regression with polynomial basis functions of degree 3 (i.e. basis functions $x$, $x^2$, $x^3$ for each predictor $x$)
+* Regression with B-splines basis function on each predictor with three degrees of freedom 
+
+# Part 2b: Generalized Additive Model (GAM)
+Do you see any advantage in fitting an additive regression model to this data compared to the above models? 
+
+1. Fit a GAM to the training set, and compare the test $R^2$ of the fitted model to the above models. You may use a smoothing spline basis function on each predictor, with the same smoothing parameter for each basis function, tuned using cross-validation on the training set. 
+
+2. Plot and examine the smooth of each predictor for the fitted GAM, along with plots of upper and lower standard errors on the predictions. What are some useful insights conveyed by these plots, and by the coefficients assigned to each local model?
+
+3. Use a likelihood ratio test to compare GAM with the linear regression model fitted previously. Re-fit a GAM leaving out the predictors 'PrecentageAsian' and 'PercentageUrban'. Using a likelihood ratio test, comment if the new model is preferred to a GAM with all predictors. 
+
+*Hint:* 
+You may use the `gam` function for fitting a GAM, and the function `s` for smoothing spline basis functions. These functions are available in the `gam` library. For k-fold cross-validation, you may adapt the sample code provided in the previous question. The `plot` function can be used to visualize the smooth of each predictor for the fitted GAM (set the attribute `se` to `TRUE` to obtain standard error curves). You may use the `anova` function to compare two models using a likelihood ratio test (with attribute `test='Chi'`).
+
+# Part 2c: Including interaction terms
+Re-fit the GAM with the following interaction terms included:
+
+ * A local regression basis function involving attributes 'Population', 'PercentageUrban' and 'MedIncome'
+ * A local regression basis function involving a race-related attribute and 'MedIncome'

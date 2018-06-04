@@ -1,0 +1,445 @@
+---
+title: 'CS 109B : Homework 4'
+author: "Isabelle Mieling"
+date: "March 5, 2017"
+output: pdf_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+# svm library
+library('e1071')
+library(caret)
+library(reshape2)
+library(ggplot2)
+library(MCMCpack)
+
+```
+
+
+# Problem 1: Celestial Object Classification
+
+
+In this problem, the task is to classify a celestial object into one of 4 categories using photometric measurements recorded about the object. The training and testing datasets are provided in the `dataset_1_train.txt` and `dataset_1_test.txt` respectively. Overall, there are a total of 1,379 celestial objects described by 61 attributes. The last column contains the object category we wish to predict, `Class`.
+
+
+```{r results="hold"}
+# import data
+train = read.csv("datasets/dataset_1_train.txt", header=TRUE)
+test = read.csv("datasets/dataset_1_test.txt", header=TRUE)
+
+
+```
+
+First, we ensure that the that `Class` is a factor (quantitative values). 
+
+```{r, warning=FALSE, message=FALSE}
+
+train$Class <- factor(train$Class)
+test$Class <- factor(test$Class)
+
+class(train$Class)
+```
+
+1. Fit an RBF kernel to the training set with parameters `gamma` and `cost` both set to 1. Use the model to predict on the test set. 
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+
+# Model1 : gamma & cost = 1
+
+m1 <- svm(Class ~ ., 
+          data=train, 
+          kernel="radial",
+          gamma = 1, cost = 1)
+
+# Use model to predict on the test set 
+predictions <- predict(m1, test)
+tpredictions <- predict(m1, train)
+table(test$Class, predictions)
+table(train$Class, tpredictions)
+table(test$Class, predictions)
+
+```
+
+2. Look at the confusion matricies for both the training and testing predictions from the above model. What do you notice about the predictions from this model?  
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+
+# Confusion matrix for train prediction from model 1
+confusionMatrix(tpredictions, train$Class)
+
+# Confusion matrix for test prediction from model 1
+confusionMatrix(predictions, test$Class)
+
+```
+
+
+The model performs well on the training set; as expted, it has perfect accuracy = 1. For the test set, the model predicts all class 3 and still gets ~72% accuracy. This may be due to the fact that a large proportion of the training data as well as test data have class 3: 492/689 for the training set and 499/690 for the test set. This is an interesting observation becasue since there are so many observations which fall into Class = 3, it seems to be more highly weighted and therefore all test observations are classified into this category. This results in a relatively high accuracy since the test data set also has many observations with Class = 3. 
+
+
+3. For the RBF kernel, make a figure showing the effect of the kernel parameter $\gamma$ on the training and test errors? Consider some values of `gamma` between 0.001 and 0.3. Explain what you are seeing. 
+
+We can look across a grid of parameters and find which gamma minimizes the training and test errors. 
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+
+m_gamma <- tune(svm, Class ~ ., 
+          data=train, 
+          ranges=list(gamma = seq(0.001, 0.3, by=0.001), cost = 1))
+
+m_gammatest <- tune(svm, Class ~ ., 
+          data=test, 
+          ranges=list(gamma = seq(0.001, 0.3, by=0.001), cost = 1))
+
+ggplot(m_gamma$performances,
+       mapping = aes(x = gamma, y = error)) + 
+  geom_line() + 
+  facet_wrap(~cost, labeller = label_both)
+
+ggplot(m_gammatest$performances, 
+       mapping = aes(x = gamma, y = error)) + 
+  geom_line() + 
+  facet_wrap(~cost, labeller = label_both)
+
+
+```
+
+Here we see a curve of different values of gamma against the error when the cost = 1. We see in these two graphs above that the error decreases for small values of gamma but then increases drastically as gamma increases, starting at around 0.003. We see that both graphs look very similar and that for both the test and the training set, the same value for gamma of about 0.003 should give the lowest error. 
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+
+param_range <- seq(0.001, 0.3, by=0.01)
+num_param = length(param_range)
+
+train_error = rep(0., num_param) # Store cross-validated logloss for different parameter values
+test_error = rep(0., num_param) # Store cross-validated logloss for different parameter values
+
+for(i in 1:num_param){
+  m <- svm(Class ~ ., data=train, 
+           kernel="radial",
+           gamma = param_range[i], cost = 1)
+  a <- table(train$Class, predict(m, train))
+  train_error[i] <- (1 - ((a[1,1] + a[2,2] + a[3,3] + a[4,4]) / nrow(train))) 
+  a <- table(test$Class, predict(m, test))
+  test_error[i] <- (1 - ((a[1,1] + a[2,2] + a[3,3] + a[4,4]) / nrow(test))) 
+  
+} 
+
+param_range <- as.vector(param_range)   
+
+Train_or_test = rep(0, num_param)
+train_or_Test = rep(1, num_param)
+df <- data.frame(param_range,train_error, Train_or_test)
+df2 <- data.frame(param_range,test_error, train_or_Test)
+colnames(df) <- c("gamma","error", "train_or_test")
+colnames(df2) <- c("gamma","error", "train_or_test")
+# merge both dataframes to plot
+total_df <- rbind(df, df2)
+
+# plot the errors on Y the gamma  on X
+attach(total_df)
+plot(gamma, error, main="Train and Test Error vs. Gamma", sub="SVM Model, Cost = 1", 
+  	xlab="Gamma", ylab="Error ", pch=19 ) + points(gamma, col=train_or_test)
+
+
+qplot(gamma, error, colour=train_or_test, data=total_df, main='Train and Test Error vs. Gamma,
+      Cost = 1')
+
+
+```
+
+4. For the RBF kernel, make a figure showing the effect of the `cost` parameter on the training and test errors? Consider some values of `cost` in the range of 0.1 to 20. Explain what you are seeing. 
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+
+param_range <- seq(0.1, 20, by=0.5)
+num_param = length(param_range)
+
+train_error = rep(0., num_param) # Store cross-validated logloss for different parameter values
+test_error = rep(0., num_param) # Store cross-validated logloss for different parameter values
+
+for(i in 1:num_param){
+  m <- svm(Class ~ ., data=train, 
+           kernel="radial",
+           cost = param_range[i], gamma = 1)
+  a <- table(train$Class, predict(m, train))
+  train_error[i] <- (1 - ((a[1,1] + a[2,2] + a[3,3] + a[4,4]) / nrow(train))) 
+  a <- table(test$Class, predict(m, test))
+  test_error[i] <- (1 - ((a[1,1] + a[2,2] + a[3,3] + a[4,4]) / nrow(test))) 
+  
+} 
+
+param_range <- as.vector(param_range)   
+
+Train_or_test = rep(0, num_param)
+train_or_Test = rep(1, num_param)
+df <- data.frame(param_range,train_error, Train_or_test)
+df2 <- data.frame(param_range,test_error, train_or_Test)
+colnames(df) <- c("cost","error", "train_or_test")
+colnames(df2) <- c("cost","error", "train_or_test")
+# merge both dataframes to plot
+total_df <- rbind(df, df2)
+
+# plot the errors on Y the gamma  on X
+attach(total_df)
+plot(cost, error, main="Train and Test Error vs. Cost", sub="SVM Model, Gamma = 1", 
+  	xlab="Cost", ylab="Error ", pch=19 ) + points(cost, col=train_or_test)
+
+
+qplot(cost, error, colour=train_or_test, data=total_df, main='Train and Test Error vs. Cost, 
+      Gamma = 1')
+
+
+```
+
+
+
+5. Now the fun part: fit SVM models with the linear, polynomial (degree 2) and RBF kernels to the training set, and report the misclassification error on the test set for each model. Do not forget to tune all relevant parameters using 5-fold cross-validation on the training set (tuning may take a while!). *Hint*: Use the `tune` function from the `e1071` library. You can plot the error surface using `plot` on the output of a `tune` function.
+
+```{r, warning=FALSE, message=FALSE, cache=TRUE}
+
+# Start to tune with a broad range to start off 
+
+# fit SVM model with linear kernel to training set (doesn't need gamma)
+m_lin <- tune(svm, Class ~ ., data = train, kernel='linear', 
+          ranges = list( cost = 2^(-8:-2)), 
+          tunecontrol = tune.control(sampling = 'cross', cross=5))
+m_lin
+
+# fit SVM model with polynomial 2 kernel to training set 
+m_poly <- tune(svm, Class ~ ., data = train, kernel='polynomial', degree=2, 
+          ranges = list(gamma = 2^(-15:3), cost = 2^(-8:-2)), 
+          tunecontrol = tune.control(sampling = 'cross', cross=5))
+m_poly
+
+# fit SVM model with RBF kernel to training set 
+m_rbf <- tune(svm, Class ~ ., data = train, kernel='radial', 
+          ranges = list(gamma = 2^(-15:3), cost = 2^(-8:-2)), 
+          tunecontrol = tune.control(sampling = 'cross', cross=5))
+m_rbf
+
+plot(m_lin)
+# looks like the linear tuning worked 
+
+plot(m_poly)
+# should try looking at smaller gammas 
+
+plot(m_rbf)
+# need to look at higher cost and smaller gamma
+
+### 
+
+# fit SVM model with polynomial 2 kernel to training set 
+m_poly <- tune(svm, Class ~ ., data = train, kernel='polynomial', degree=2, 
+          ranges = list(gamma = seq(0.001, 0.3, by=0.01), cost = seq(0.001, 0.3, by=0.01)),
+          tunecontrol = tune.control(sampling = 'cross', cross=5))
+m_poly
+
+# fit SVM model with RBF kernel to training set 
+m_rbf <- tune(svm, Class ~ ., data = train, kernel='radial', 
+          ranges = list(gamma = 2^(-15:3), cost = 2^(-8:-2)), 
+          tunecontrol = tune.control(sampling = 'cross', cross=5))
+m_rbf
+
+```
+
+6. What is the best model in terms of testing accuracy? How does your final model compare with a naive classifier that predicts the most common class (3) on all points?
+
+```{r}
+
+## Predictions: 
+
+predictions_lin <- predict(m_lin$best.model, test)
+predictions_poly <- predict(m_poly$best.model, test)
+predictions_rbf <- predict(m_rbf$best.model, test)
+
+confusionMatrix(predictions_lin, test$Class)
+confusionMatrix(predictions_poly, test$Class)
+confusionMatrix(predictions_rbf, test$Class)
+
+```
+
+Above we calculated the percent accuracy for each of these models on the test set. The model that gives the highest testing accuracy is the model with the linear kernel with 98% accuracy on the test set. This model also performs better than the naive classifier that predicts the most common class for all points. The best model is therefore m_lin. 
+
+
+# Problem 2: Return of the Bayesian Hierarchical Model
+
+In order to focus on the benefits of Hierarchical Modeling we're going to consider a model with only one covariate (and intercept term). 
+
+```{r results="hold"}
+
+dataI = read.csv("datasets/dataset_2.txt", header=TRUE)
+
+# extract number of districts 
+unique(dataI$district)
+num_dist <- length(unique(dataI$district))
+num_dist
+
+```
+
+1. Fit the following three models
+
+	(a) Pooled Model: a single logistic regression for `contraceptive_use` as a function of `living.children`.  
+	(b) Unpooled Model: a model that instead fits a separate logistic regression for each `district`.  
+	(c) Bayesian Hierarchical Logistic Model: a Bayesian hierarchical logistic regression model with `district` as the grouping variable.  
+
+```{r, warning=FALSE, message=FALSE}
+
+# a. Pooled Model
+moda <- glm(contraceptive_use ~ living.children, family=binomial(link="logit"), data=dataI)
+summary(moda)
+
+moda_coef1 <- moda$coefficients[2]
+moda_coef1
+
+
+## There are 60 districts 
+coef_a <- rep(moda_coef1, num_dist)
+
+```
+
+As we can see from the summary of this model, both the intercept and living.children covariate are statistically significant in the mode. This is a simple logistic regression model for contraceptive.use as a function of living.children. 
+
+```{r, warning=FALSE, message=FALSE}
+# b. Unpooled Model
+modb <- suppressWarnings(glm(contraceptive_use ~ -1 + living.children * as.factor(district), family=binomial(link="logit"), data=dataI))
+#summary(modb)
+
+# Get coefficients for living children variables by district  
+length(modb$coefficients)
+length(modb$coefficients[61:120])
+
+coef_b <- modb$coefficients[61:120]
+```
+
+This model fits a separate logistic regression for each district. This model formula accomplishes the task of fitting separate models per district becuase it uses as a covariate the interaaction term between the living.children and the district. If we look at the summary output of this model we see that we have many coefficients since we are fitting a separate model for each district. Some of these are statistically significant while others are not. 
+
+
+```{r, warning=FALSE, message=FALSE}
+# c. Bayesian Hierarchical Logistic Model 
+# district as grouping variable
+modc <- MCMChlogit(fixed = contraceptive_use ~ living.children, random = ~ living.children,
+                   group="district", data=dataI, burnin = 5000, mcmc = 10000, thin=1, verbose = 1,
+                   beta.start = NA, sigma2.start = NA, Vb.start = NA,
+                   mubeta = c(-1,0.2124), Vbeta = 10000,
+                   r = 3, R = diag(c(1, 0.1)), nu = 0.001, delta = 0.001)
+
+#summary(modc$mcmc)
+
+coef_modc <- summary(modc$mcmc)$statistics
+coef_modc <- coef_modc[63:122]
+```
+
+In this model we fit a Bayesian hierarchical logistic regression model with `district` as the grouping variable. The function we use generates a sample from the posterior distributon of a Hierarchical Binomial Linear Regression Model. The setup for this kind of model is that we observe response data and predictor variables as in a usual regression setting except that now that samples are clustered by a grouping variable, in this case the district. 
+
+We have two options when we have this kind of data: for each group, we could fit a separate regression models or we could pool all the data and fit a single regression model. We have done both of these things above. The results from the hierarchcial model are different from the first two models because it acknowledges the relationships between the outcome variable and the covariate that may differ within each group.  
+
+The results of this model are different from the pooled and unpooled models of parts (a) and (b). We see that this model has many more variables than either of the two models, due in part to the fact that we are using the distict as grouping variables and are using Markov Chain Monte Carlo sampling so we're getting some different numbers for coefficients. 
+
+*--* 
+
+2. In class we discussed that one of the benefits of using Bayesian hierarchical models is that it naturally shares information across the groupings. In this case, information is shared across districts. This is generally known as shrinkage. To explore the degree of shrinkage, we are going to compare coefficients across models and districts based on your results from part 1 above.
+
+(a) Create a single figure that shows the estimated coefficient to `living.children` as a function of district in each of the three models above.
+	
+```{r, warning=FALSE, message=FALSE}
+
+# create a plot of the coefficients of all three models 
+
+# Here are the coefficients for the three models we want to plot
+#coef_a
+#coef_b
+#coef_modc
+
+legend1 <- c("Model a: pooled", "Model b: unpooled", "Model c: Bayesian Hierarchical")
+
+# Put into dataframe and plot 
+coef_adf <- as.data.frame(coef_a)
+coef_bdf <- as.data.frame(coef_b)
+coef_cdf <- as.data.frame(coef_modc)
+row.names(coef_bdf) <- row.names(coef_adf)
+
+plot1 <- ggplot(coef_adf, aes(x = rownames(coef_adf) ,y=coef_adf)) +
+    geom_point(shape=1.5, col='red') +
+  geom_point(aes(x = rownames(coef_bdf) ,y=coef_bdf),shape=1.5, col='blue')  +
+  geom_point(aes(x = rownames(coef_cdf) ,y=coef_cdf),shape=1.5, col='green') + xlab('Districts') + ylab('Estimated Coefficients') + labs(title = "Estimated Coefficients for 3 Models per District") +
+   theme(legend.position = "top")
+
+plot1 # legend("top", legend = legend1)
+```
+	
+
+
+(b) Write a short summary (300 words or less) that interprets the graph from part (a).  Pay particular attention to the relationship between the coefficients within each district, and how or whether the number of observations within each district plays a role in the relationship.  You may speculate on the reasons for what you are seeing. 
+
+For the first model, we only have 1 coefficient since it is a pooled model. Therefore, the coefficients do not vary by district for the first model. For the unpooled model we see a very slight variation in the coefficients according to district however, most of the points hover around zero with only a few districts with coefficients much larger or smaller. Lastly, in the hierarchical model we see a lot of variation among districts for coefficients. This may be due in part by the fact that Bayesian Hierarchical models share information across districts. We see that there is a lot of overlap with model b and model a. 
+
+
+3. Another benefit of shrinkage is how it affects probability estimates. Extract the estimated probabilities from each model applied to the training data.
+	
+```{r, warning=FALSE, message=FALSE}
+
+est_prob_a <- predict(moda, dataI, type="response")
+est_prob_a[1:20] # just for an example
+
+est_prob_b <- predict(modb, dataI, type="response")
+est_prob_b[1:20]
+
+est_prob_c <- modc$theta.pred
+est_prob_c[1:20] 
+
+```
+
+
+(a) Plot histograms of the vectors of probability estimates for each model separately. 
+Make sure you standardize the horizontal axis so that the scales are the same. 
+How does the distribution of estimated probabilities compare across the three models?
+	
+```{r, warning=FALSE, message=FALSE}
+
+
+hist(est_prob_a, xlim = range(0,1), xlab = 'Probability Estimates', main = 'Probability Estimates for Model a: Pooled Model')
+
+hist(est_prob_b, xlim = range(0,1), xlab = 'Probability Estimates', main = 'Probability Estimates for Model b: Unpooled Model')
+
+hist(est_prob_c, xlim = range(0,1), xlab = 'Probability Estimates', main = 'Probability Estimates for Model c: Bayesian Hierarchical Logistic Model')
+
+
+```
+
+We notice that model a, the pooled model, has a tight distribution centered around .4 probability with little variation. In contrast, model b has large variability in the distribution of estiamted probabilities with a histogram that has an almost-normal distribution which is slightly right-skewed. Lastly, model C is somewhere in the middle with a bit of a tighter distribtuion that appears to be almost normal with a left-skew. Overall, the distributions of the estimated probabilities varies from model to model with the pooled model having the least variation and the unpooled model having the most variation with some frequency spanning probability estiamtes from 0.0 to 1.0.   
+	
+(b) Create a scatter plot comparing predicted values from Unpooled and Hierarchical Models, 
+making sure that the scale of the horizontal and vertical axes are the same, and that the plotting 
+region is square rather than rectangular. Include on the plot the line $y=x$ (why do you think this is 
+a useful line to superimpose?).  Briefly interpret the relationship between the probability estimates 
+for these two models.  Are there particular features of the plot that highlight the intended benefits 
+of using a hierarchical model over the unpooled analysis?  Briefly explain.
+
+```{r, warning=FALSE, message=FALSE}
+
+est_prob_a <- predict(moda, dataI, type="response")
+est_prob_a[1:20] # just for an example
+pred_b <- predict(modb, dataI)
+pred_b <- as.data.frame(pred_b)
+pred_c <- as.data.frame(est_prob_c)
+
+
+
+plot2 <- ggplot(pred_b, aes(x = rownames(pred_b) ,y=pred_b)) +
+    geom_point(shape=1.5, col='red') +
+geom_point(aes(x = rownames(pred_c) ,y=pred_c,shape=1.5, col='blue') )
+
+```
+
+# Problem 3: AWS Preparation
+
+* The email address associated with your AWS account : isabellemieling@mail.harvard.edu
+* The email address associated with your Harvard ID, if different from above : same as above
+* Your AWS ID. This should be a 10 digit number : 530418841445
+
+
+
+
+

@@ -1,0 +1,395 @@
+---
+title: "CS109b_homework2: Smoothers, Generalized Additive Models, and Storytelling"
+author: "Isabelle Mieling"
+date: "February 13, 2017"
+output: pdf_document
+---
+
+# Problem 1: Heart Disease Diagnosis
+
+Task is to build a model that can diagnose heart disease for a patient presented with chest pain. Datasets contain, or several patients, 6 predictors and the diagnosis from a medical profession. 
+
+```{r, eval=TRUE}
+# import libraries
+#install.packages("lmtest")
+library(gam)
+library(ggplot2)
+library(boot)
+library(lmtest)
+```
+
+```{r results="hold"}
+# import train and test data
+train = read.csv("CS109b-hw2_q1_datasets/dataset_1_train.txt", header=TRUE)
+test = read.csv("CS109b-hw2_q1_datasets/dataset_1_test.txt", header=TRUE)
+
+# Convert ChestPain variable categorical variable
+train$ChestPain <- as.numeric(factor(train$ChestPain, levels=c('asymptomatic', 'nonanginal', 'nontypical', 'typical')))
+test$ChestPain <- as.numeric(factor(test$ChestPain, levels=c('asymptomatic', 'nonanginal', 'nontypical', 'typical')))
+
+# Convert Thal variable categorical variable
+train$Thal <- as.numeric(factor(train$Thal, levels=c('fixed', 'normal', 'reversable')))
+test$Thal <- as.numeric(factor(test$Thal, levels=c('fixed', 'normal', 'reversable')))
+
+# Convert outcome variable to binary: 1 = yes, 0 = no 
+train$HeartDisease  <- ifelse(train$HeartDisease =='No', 0, 1)
+test$HeartDisease  <- ifelse(test$HeartDisease =='No', 0, 1)
+
+head(train)
+head(test)
+```
+
+##### Visualize data
+I will first create 2 dataframes: one for patients who were diagnosed with heart disease and one for patients who were not diagnosed with heart disease. Then I will create plot of the 6 predictors and compare them for patients with and without diagnosis of heart disease. 
+
+```{r, eval=TRUE}
+# create 2 new dataframes: one with heart disease diagnosis and one with no diagnosis
+hd <- train[train$HeartDisease == 1, ]
+no_hd <- train[train$HeartDisease == 0, ]
+
+# Convert ChestPain variable categorical variable
+hd$ChestPain <- as.numeric(factor(hd$ChestPain, levels=c('asymptomatic', 'nonanginal', 'nontypical', 'typical')))
+no_hd$ChestPain <- as.numeric(factor(no_hd$ChestPain, levels=c('asymptomatic', 'nonanginal', 'nontypical', 'typical')))
+
+# Convert Thal variable categorical variable
+hd$Thal <- as.numeric(factor(hd$Thal, levels=c('fixed', 'normal', 'reversable')))
+no_hd$Thal <- as.numeric(factor(no_hd$Thal, levels=c('fixed', 'normal', 'reversable')))
+```
+
+Sex: 
+Of patients with diagnosed heart disease, percent that are Female (assuming Female is coded as 0) : 
+``` {r, eval=TRUE} 
+(nrow(hd[hd$Sex == 0, ]) / 104) * 100
+``` 
+
+Of patients without diagnoes heart disease, percent that are Female (assuming Female is coded as 0) :
+``` {r, eval=TRUE}
+(nrow(no_hd[no_hd$Sex == 0, ]) / 106) * 100
+```
+
+### Some plots 
+*Notice, the scale on the y-axis is different for these plots*
+
+*Multiplot function code taken from: http://www.cookbook-r.com/Graphs/Multiple_graphs_on_one_page_(ggplot2)/* 
+
+```{r, eval=TRUE}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+
+```{r, eval=TRUE, message=FALSE, warning=FALSE,}
+# Plot training set
+
+#SEX
+p1 <- ggplot(hd, mapping = aes(x = Sex)) + geom_histogram() +
+  labs(x = 'Sex', title ='Sex vs. Heart Disease Diagnosis') 
+
+p2 <- ggplot(no_hd, mapping = aes(x = Sex)) + geom_histogram() +
+  labs(x = 'Sex', title ='Sex vs. No Heart Disease Diagnosis') 
+
+#AGE
+p3 <- ggplot(hd, mapping = aes(x = Age)) + geom_histogram() +
+  labs(x = 'Age', title ='Age vs. Heart Disease Diagnosis') 
+
+p4 <- ggplot(no_hd, mapping = aes(x = Age)) + geom_histogram() +
+  labs(x = 'Age', title ='Age vs. No Heart Disease Diagnosis') 
+
+#CHEST PAIN 
+p5 <- ggplot(train, mapping = aes(x = ChestPain, y=HeartDisease))  +
+  labs(x = 'Chest Pain Categorical',y = '%', title ='Chest Pain Categorical vs. Heart Disease') + geom_bar(stat="identity")
+
+#RESTING BLOOD PRESSURE 
+p7 <- ggplot(hd, mapping = aes(x = RestBP)) + geom_histogram() +
+  labs(x = 'Resting Blood Pressure', title ='Resting Blood Pressure vs. Heart Disease Diagnosis') 
+
+p8 <- ggplot(no_hd, mapping = aes(x = RestBP)) + geom_histogram() +
+  labs(x = 'Resting Blood Pressure', title ='Resting Blood Pressure vs. No Heart Disease Diagnosis') 
+#EXANG
+p9 <- ggplot(hd, mapping = aes(x = ExAng)) + geom_histogram() +
+  labs(x = 'ExAng', title ='ExAng vs. Heart Disease Diagnosis') 
+
+p10 <- ggplot(no_hd, mapping = aes(x = ExAng)) + geom_histogram() +
+  labs(x = 'ExAng', title ='ExAng vs. No Heart Disease Diagnosis') 
+
+#THAL
+
+p11 <- ggplot(train, mapping = aes(x = Thal, y=HeartDisease))  +
+  labs(x = 'Thal',y = '%', title ='Thal vs. Heart Disease') + geom_bar(stat="identity")
+
+multiplot(p1, p2, p3, p4, cols=2)
+
+multiplot(p5, p11, p7, p8, cols=2)
+
+multiplot( p9, p10, cols=2)
+
+```
+
+Yes, the predictors seem to be good indicators of heart disease in a patient. We can see this by looking at the differences in plots for those with diagnosed heart disease and those without. 
+
+## Apply the generalized additive model (GAM) to fit a binary classification model to the training set 
+Rather than fitting a single complex global polynomial model, GAM seeks to fit local models to each predictor. The advantage of this approach is that it is more interpretable as it allows us to examine the effect of each predictor on the response variable.
+
+We have a binary outcome, diagnosis of disease, and therefore we must use a GAM. 
+
+Sample code for cross validation:
+```{r, eval=TRUE}
+# Function to compute k-fold cross-validation accuracy for a given classification model
+cv_accuracy = function(model, data, k) {
+# Input:
+  #   'model' - a fitted classification model
+  #   'data' - data frame with training data set used to fit the model
+  #   'k' - number of folds for CV
+  # Output:
+  #   'cv_accuracy' - cross-validation accuracy for the model
+acc <- 1 - cv.glm(data, model, K = k)$delta[1]
+return(acc) }
+```
+
+Since we have 3 spline terms, we need to iterate or use cross-validation to find the best spar values for each spline
+
+```{r, message=FALSE, warning=FALSE, eval=TRUE}
+
+# this is the general gam model we want
+gam.1 <- gam(HeartDisease ~ s(Age) + s(ChestPain) + s(RestBP) + Sex + ExAng + Thal, family=binomial(link = "logit"), data=train)
+summary(gam.1)
+
+# next thing we want to decide on is what the spar values should be 
+
+cv_accuracy(gam.1, train, 10)
+cv_accuracy(gam.1, test, 10)
+
+
+## Iterate over `spar` from 0.1 -- 0.8 (in increments of 0.1),  predicting heard disease diagnosis using a *generalized additive model* (`gam`). For each value of`spar` calculate the $R^2$ value in the test and training set.
+
+spars <- seq(0.1, 0.8, by = 0.1)
+
+## iterate using a for-loop
+max.cv <- 0 
+glm.cv <- gam(HeartDisease ~ s(Age) + s(ChestPain) + s(RestBP) + Sex + ExAng + Thal, family=binomial(link = "logit"), data=train)
+s.Age <- 0
+s.Chest <- 0
+s.Rest <- 0
+
+for(sp in spars) {
+  sAge <- sp
+  for(sp in spars){
+    sChest <- sp
+    for (sp in spars) {
+      sRest <- sp
+      
+      mod <- gam(HeartDisease ~ s(Age, spar = sAge ) + s(ChestPain, spar = sChest) + s(RestBP, spar = sRest) + Sex + ExAng + Thal, family=binomial(link = "logit"), data=train)
+      
+      train.cv <- cv_accuracy(mod, train, 10)
+      if(train.cv >= max.cv) {
+        max.cv <- train.cv
+        glm.cv <- mod 
+        s.Age <- sAge
+        s.Chest <- sChest
+        s.Rest <- sRest
+      }
+      
+    }
+  }
+}
+
+# Now we put together the results of this loop to get the best glm model
+glm.final <- gam(HeartDisease ~ s(Age, spar = s.Age ) + s(ChestPain, spar = s.Chest) + s(RestBP, spar = s.Rest) + Sex + ExAng + Thal, family=binomial(link = "logit"), data=train)
+glm.final
+max.cv
+
+
+test.accuracy <- cv_accuracy(glm.final, test, 10)
+test.accuracy
+
+```
+
+We can apply smoothing spline basis functions to categorical predictors if we convert the categorical predictors to numbers. Sklearn uses a preprocessing using one-hot encoding to convert categorical predictors to numerical predictors. We can do this manually in R. 
+
+```{r, eval=TRUE}
+
+fit_gam <- function(spAge, spChest, spRest) {
+   gam(as.formula(substitute(HeartDisease ~ s(Age, spar = spAge) + s(ChestPain, spar = spChest) + s(RestBP, spar = spRest) + Sex + ExAng + Thal)), family=binomial(link = 'logit') , data = train)
+}
+
+plot(fit_gam(spAge = 0.5, spChest = 0.3, spRest = 0.5))
+
+
+
+
+
+```
+
+
+When trying to use a smoothing spline for some of the variables, an error came up: "A smoothing variable encountered with 3 or less unique values; at least 4 needed". Therefore, we cannot use a smoothing spline basis function for sex, exang and thal. We cannot apply the smoothing spline basis to categorical predictors. 
+
+Using a likelihood ratio test, compare the fitted GAM with the following models: (i) a GAM with only the intercept term; (ii) a GAM with only categorical predictors; and (iii) a GAM with all predictors entered linearly.
+ 
+
+
+
+```{r, eval = TRUE}
+
+fit.gam <- fit_gam(spAge = 0.5, spChest = 0.3, spRest = 0.5)
+mod.i <- gam(HeartDisease ~ 1, family=binomial(link = "logit"), data=train) # null model, with only intercept term
+mod.ii <- gam(HeartDisease ~ s(ChestPain) + Sex + ExAng + Thal, family=binomial(link = "logit"), data=train)
+mod.iii <- gam(HeartDisease ~ Age + ChestPain + RestBP + Sex + ExAng + Thal, family=binomial(link = "logit"), data=train)
+
+# Test with a likelihood ratio test 
+lrtest(fit.gam, mod.i)
+
+lrtest(fit.gam, mod.ii)
+
+lrtest(fit.gam, mod.iii)
+
+
+```
+
+
+What we see from these results is that, indeed, our more complicated models, Model 2 in the LRT, are statistically significant from the likelihood ratio tests. This suggests that a simpler model is not sufficient.   
+
+
+# Problem 2: The Malaria Report
+
+```{r, eval=TRUE}
+# import libraries
+library(gam)
+library(ggplot2)
+library(boot)
+library(tidyr)
+```
+
+```{r results="hold", message=FALSE, warning=FALSE}
+# import datasets
+mal.2015 = read.csv("CS109b-hw2_q2_datasets/global-malaria-2015.csv", header=TRUE)
+mal.200_013 = read.csv("CS109b-hw2_q2_datasets/global-malaria-2000-2013.csv", header=TRUE)
+fund.tot = read.csv("CS109b-hw2_q2_datasets/global-funding.csv", header=TRUE)
+
+## Reshaping Data in R
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+# Merge Count data and convert to tall format
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+
+mal.year = merge(mal.200_013, mal.2015, by = 'Code')
+data_long <- gather(mal.year, year, Estimated_Malaria_Counts, Y_2000,Y_2005,Y_2010,Y_2013,Suspected_malaria_cases, factor_key=TRUE)
+levels(data_long$year) <- c('2000', '2005', '2010', '2013', '2015')
+write.csv(data_long[,c('Code', 'Country.x', 'WHO_region', 'year', 'Estimated_Malaria_Counts')], file = './CS109b-hw2_q2_datasets/global-malaria-byYear.csv')
+
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+# Convert funding data to tall format
+# - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - - #
+
+funding_long = gather(fund.tot, year, Amount, X2005:X2013, factor_key=TRUE)
+levels(funding_long$year) <- c('2005', '2006', '2007', '2008', '2009', '2010', '2011', '2012', '2013')
+write.csv(funding_long, file = './CS109b-hw2_q2_datasets/global-funding-byYear.csv')
+
+mal.year = read.csv("CS109b-hw2_q2_datasets/global-malaria-byYear.csv", header=TRUE)
+fund.year = read.csv("CS109b-hw2_q2_datasets/global-funding-byYear.csv", header=TRUE)
+```
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+# Datasets 
+
+mal.year_africa <- mal.year[mal.year$WHO_region == 'African',]
+mal.year_africa <- mal.year_africa[mal.year_africa$Estimated_Malaria_Counts > 0,]
+mal.year_eastmed <- mal.year[mal.year$WHO_region == 'Eastern Mediterranean',]
+mal.year_europe <- mal.year[mal.year$WHO_region == 'European',]
+mal.year_ameri <- mal.year[mal.year$WHO_region == 'Region of the Americas',]
+mal.year_sea <- mal.year[mal.year$WHO_region == 'South-East Asia',]
+mal.year_wpac <- mal.year[mal.year$WHO_region == 'Western Pacific',]
+
+
+
+#### Visualizations ####
+
+# Scatterplot 1: Year vs. Funding for each Source
+# scatterplot year (x) vs. funding (y) --> points represent country 
+p <- ggplot(fund.year, mapping = aes(x = year, y = Amount) ) + geom_point() + geom_point(mapping = aes(color = Source))  +ggtitle("Total Funding for Malaria Control and Elimination by Year") + xlab("Year") + ylab("Amount (in millions USD)") 
+p
+
+# Scatterplot 2: Malaria Count vs. Year for each Country
+p1 <- ggplot(mal.year, mapping = aes(x = year, y = Estimated_Malaria_Counts) ) + geom_point() + geom_point(mapping = aes(color = WHO_region))  +ggtitle("Estimated Malaria Count per WHO Region by Year") + xlab("Year") + ylab("# of Malaria Cases") 
+p1
+
+# Scatterplot 3: Malaria Count vs. Year for each Country in African WHO Region
+p2 <- ggplot(mal.year_africa, mapping = aes(x = year, y = Estimated_Malaria_Counts) ) + geom_point() + geom_point(mapping = aes(color = Country.x))  +ggtitle("Estimated Malaria Count per WHO Region by Year") + xlab("Year") + ylab("# of Malaria Cases") 
+p2
+
+# Scatterplot 4: Malaria Cases vs. Year by WHO Region
+p3 <- ggplot(data_long, mapping = aes(x = year, y = Malaria_cases) ) + geom_point() + geom_point(mapping = aes(color = WHO_region))  +ggtitle("Estimated Malaria Count per WHO Region by Year") + xlab("Year") + ylab("# of Malaria Cases") 
+p3
+
+```
+
+```{r eval=TRUE, message=FALSE, warning=FALSE}
+
+# Pie charts
+
+# PIe Chart 1: malaria cases out of entire population in top countries 2015  
+# Top 10 countries where malaria is most prevalent (highest numbers) 
+
+top_ten <- c('Nigeria', 'Uganda', 'Democratic Republic of the Congo', 'Kenya', 'Ghana', 'Burkina Faso', 'United Republic of Tanzania', 'Zambia', 'Malawi', 'Burundi')
+
+layout(matrix(c(1,2,3, 4, 5, 6, 7, 8, 9, 10), 5, 2, byrow = TRUE))
+
+for (item in top_ten){
+  item.case <- mal.2015[mal.2015$Country == item, 8]
+  item.total <- mal.2015[mal.2015$Country == item, 4]
+  tot <- item.total - item.case
+  slices <- c(item.case, tot)
+  lbls <- c('Cases', 'At Risk, Not Cases')
+  pct <- round(slices/sum(slices)*100)
+  lbls <- paste(lbls, pct) # add percents to labels 
+  lbls <- paste(lbls,"%",sep="") # ad % to labels 
+  title <- item
+  pie(slices,labels = lbls, col=rainbow(length(lbls)),
+  	main=title)
+}
+ 
+ 
+``` 
+ 
