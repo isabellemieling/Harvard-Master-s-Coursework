@@ -4,7 +4,5 @@ This repository contains various assignments and projects I completed during my 
 
 ## Courses
 
-The courses I took include the following: 
-
 CS109A/B - Computer Science 109A/B : Introduction to Data Science  
 BST210 - Biostatistics 210 : Applied Regression Analysis
